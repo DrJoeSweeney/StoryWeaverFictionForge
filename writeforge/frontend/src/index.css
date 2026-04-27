@@ -1,0 +1,129 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 222.2 84% 4.9%;
+    --radius: 0.5rem;
+
+    --app-font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --heading-h1-size: 1.875rem;
+    --heading-h2-size: 1.5rem;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 212.7 26.8% 83.9%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--app-font);
+  }
+}
+
+/* TipTap / prose heading sizes */
+.prose h1 {
+  font-size: var(--heading-h1-size) !important;
+}
+.prose h2 {
+  font-size: var(--heading-h2-size) !important;
+}
+.prose h3 {
+  font-size: var(--heading-h3-size) !important;
+}
+.prose h4 {
+  font-size: var(--heading-h4-size) !important;
+}
+
+/* Persistent selection highlight — visible even when editor loses focus */
+.selection-persistent {
+  background-color: hsl(211 100% 75%);
+  border-radius: 1px;
+}
+.dark .selection-persistent {
+  background-color: hsl(211 80% 45%);
+}
+
+/* Internal wiki links: [[Document Name]] */
+.internal-link {
+  color: hsl(210 100% 40%);
+  text-decoration: underline;
+  text-decoration-color: hsl(210 100% 70%);
+  text-underline-offset: 2px;
+  cursor: pointer;
+  border-radius: 2px;
+  padding: 0 1px;
+  font-weight: 500;
+}
+.internal-link:hover {
+  background-color: hsl(210 100% 95%);
+  text-decoration-color: hsl(210 100% 40%);
+}
+.dark .internal-link {
+  color: hsl(210 100% 70%);
+  text-decoration-color: hsl(210 100% 50%);
+}
+.dark .internal-link:hover {
+  background-color: hsl(210 100% 15%);
+  text-decoration-color: hsl(210 100% 70%);
+}
+
+/* Content tags: #my-tag */
+.content-tag {
+  color: hsl(280 65% 45%);
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+.content-tag:hover {
+  background-color: hsl(280 65% 95%);
+}
+.dark .content-tag {
+  color: hsl(280 65% 70%);
+}
+.dark .content-tag:hover {
+  background-color: hsl(280 65% 20%);
+}
