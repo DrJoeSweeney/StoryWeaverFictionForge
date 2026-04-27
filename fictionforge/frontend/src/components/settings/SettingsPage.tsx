@@ -96,6 +96,11 @@ export default function SettingsPage() {
   const [testingProvider, setTestingProvider] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [showModels, setShowModels] = useState(false)
+  const [filterTraining, setFilterTraining] = useState(false)
+  const [filterFree, setFilterFree] = useState(false)
+  const [filterCheap, setFilterCheap] = useState(false)
+  const [filterMid, setFilterMid] = useState(false)
+  const [filterExpensive, setFilterExpensive] = useState(false)
   const [language, setLanguage] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('fictionforge-language') || 'en-US'
@@ -437,16 +442,77 @@ export default function SettingsPage() {
               </div>
             ) : activeModels && activeModels.length > 0 ? (
               <div className="space-y-4 max-h-[500px] overflow-y-auto">
+                {/* Category filter bar */}
+                <div className="flex flex-wrap items-center gap-2 p-3 bg-secondary/30 rounded-lg border">
+                  <span className="text-xs font-medium text-muted-foreground mr-1">Hide:</span>
+                  <FilterToggle
+                    active={filterTraining}
+                    onToggle={() => setFilterTraining(v => !v)}
+                    icon={<AlertTriangle className="h-3.5 w-3.5 text-amber-500" />}
+                    label="Trains"
+                  />
+                  <FilterToggle
+                    active={filterFree}
+                    onToggle={() => setFilterFree(v => !v)}
+                    icon={<span className="text-[10px] font-bold text-blue-500">̶$̶</span>}
+                    label="Free"
+                  />
+                  <FilterToggle
+                    active={filterCheap}
+                    onToggle={() => setFilterCheap(v => !v)}
+                    icon={<span className="text-[10px] font-bold text-green-500">$</span>}
+                    label="Cheap"
+                  />
+                  <FilterToggle
+                    active={filterMid}
+                    onToggle={() => setFilterMid(v => !v)}
+                    icon={<span className="text-[10px] font-bold text-yellow-500">$$</span>}
+                    label="Mid"
+                  />
+                  <FilterToggle
+                    active={filterExpensive}
+                    onToggle={() => setFilterExpensive(v => !v)}
+                    icon={<span className="text-[10px] font-bold text-red-500">$$$</span>}
+                    label="Exp"
+                  />
+                  <div className="ml-auto flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setFilterTraining(false)
+                        setFilterFree(false)
+                        setFilterCheap(false)
+                        setFilterMid(false)
+                        setFilterExpensive(false)
+                      }}
+                      className="text-xs px-2 py-1 rounded border hover:bg-accent"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
                 {(() => {
-                  const grouped = activeModels.reduce((acc, m) => {
+                  const filtered = activeModels.filter(m => {
+                    if (filterTraining && m.trains_on_data) return false
+                    if (filterFree && m.cost_tier === 'free') return false
+                    if (filterCheap && m.cost_tier === 'cheap') return false
+                    if (filterMid && m.cost_tier === 'mid') return false
+                    if (filterExpensive && m.cost_tier === 'expensive') return false
+                    return true
+                  })
+                  if (filtered.length === 0) {
+                    return <p className="text-sm text-muted-foreground text-center py-4">No models match the current filters.</p>
+                  }
+                  const grouped = filtered.reduce((acc, m) => {
                     const key = (m as any).real_provider || m.provider
                     if (!acc[key]) acc[key] = []
                     acc[key].push(m)
                     return acc
                   }, {} as Record<string, typeof activeModels>)
                   Object.values(grouped).forEach(list => list.sort((a, b) => a.name.localeCompare(b.name)))
-                  return Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b))
-                })().map(([prov, models]) => {
+                  const entries = Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b))
+                  return (
+                    <>
+                      {entries.map(([prov, models]) => {
                   const allHidden = models.every(m => isHidden(m.id))
                   const someHidden = models.some(m => isHidden(m.id))
                   return (
@@ -537,7 +603,10 @@ export default function SettingsPage() {
                     </div>
                   )
                 })}
-              </div>
+              </>
+            )
+          })()}
+        </div>
             ) : (
               <p className="text-sm text-muted-foreground text-center py-4">
                 No active API keys configured. Add a key above to see available models.
@@ -578,5 +647,22 @@ export default function SettingsPage() {
         )}
       </div>
     </div>
+  )
+}
+
+function FilterToggle({ active, onToggle, icon, label }: { active: boolean; onToggle: () => void; icon: React.ReactNode; label: string }) {
+  return (
+    <button
+      onClick={onToggle}
+      className={`flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-md text-[10px] font-medium transition-colors border ${
+        active
+          ? 'bg-destructive/10 border-destructive/30 text-destructive'
+          : 'bg-background border-border text-muted-foreground hover:bg-accent'
+      }`}
+      title={active ? `Hiding ${label} models` : `Show ${label} models`}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
   )
 }
