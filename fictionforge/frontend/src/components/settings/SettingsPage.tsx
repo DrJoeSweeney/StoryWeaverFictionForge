@@ -16,6 +16,7 @@ interface AIModel {
   name: string
   provider: string
   real_provider?: string
+  cost_tier?: string
   capabilities: string[]
 }
 
@@ -44,6 +45,31 @@ const LANGUAGES = [
   { code: 'hi', name: 'Hindi' },
   { code: 'ar', name: 'Arabic' },
 ]
+
+function CostTierIcon({ tier }: { tier?: string }) {
+  if (!tier) return null
+  const labels: Record<string, string> = {
+    free: 'Free',
+    cheap: 'Cheap',
+    mid: 'Mid',
+    expensive: 'Expensive',
+  }
+  const text = (() => {
+    switch (tier) {
+      case 'free': return '̶$̶'
+      case 'cheap': return '$'
+      case 'mid': return '$$'
+      case 'expensive': return '$$$'
+      default: return null
+    }
+  })()
+  if (!text) return null
+  return (
+    <span title={labels[tier] || tier} className="text-[10px] font-bold tabular-nums text-muted-foreground">
+      {text}
+    </span>
+  )
+}
 
 export default function SettingsPage() {
   const { settings, setSettings } = useUISettings()
@@ -481,6 +507,7 @@ export default function SettingsPage() {
                               {model.capabilities?.includes('long_context') && <span title="Long Context"><ScrollText className="h-3 w-3 text-muted-foreground" /></span>}
                               {model.capabilities?.includes('audio') && <span title="Audio"><Music className="h-3 w-3 text-muted-foreground" /></span>}
                               {model.capabilities?.includes('image') && <span title="Image"><Image className="h-3 w-3 text-muted-foreground" /></span>}
+                              <CostTierIcon tier={model.cost_tier} />
                             </div>
                           </div>
                           <div className="flex flex-wrap gap-1 mt-1">

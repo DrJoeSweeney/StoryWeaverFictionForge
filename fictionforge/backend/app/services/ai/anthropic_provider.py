@@ -47,12 +47,12 @@ class AnthropicProvider:
     def list_models(self) -> list[ModelInfo]:
         return [
             ModelInfo(id="claude-3-5-sonnet-20241022", name="Claude 3.5 Sonnet", provider="anthropic", max_tokens=8192,
-                      context_window=200000,
+                      cost_tier="mid", context_window=200000,
                       capabilities=[ModelCapability.REASONING, ModelCapability.WRITING, ModelCapability.LONG_CONTEXT]),
             ModelInfo(id="claude-3-5-haiku-20241022", name="Claude 3.5 Haiku", provider="anthropic", max_tokens=8192,
-                      context_window=200000,
+                      cost_tier="cheap", context_window=200000,
                       capabilities=[ModelCapability.WRITING, ModelCapability.CODING]),
             ModelInfo(id="claude-3-opus-20240229", name="Claude 3 Opus", provider="anthropic", max_tokens=4096,
-                      context_window=200000,
+                      cost_tier="expensive", context_window=200000,
                       capabilities=[ModelCapability.REASONING, ModelCapability.WRITING, ModelCapability.LONG_CONTEXT]),
         ]

@@ -7,6 +7,7 @@ interface AIModel {
   name: string
   provider: string
   real_provider?: string
+  cost_tier?: string
   capabilities: string[]
 }
 

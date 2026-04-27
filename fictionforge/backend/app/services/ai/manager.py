@@ -35,6 +35,26 @@ def decrypt_credentials(encrypted: str) -> dict:
     return json.loads(f.decrypt(encrypted.encode()).decode())
 
 
+def _get_cost_tier(pricing: dict | None) -> str:
+    """Determine cost tier from OpenRouter pricing data (per-token)."""
+    if not pricing:
+        return "mid"
+    prompt_price = pricing.get("prompt")
+    if prompt_price is None:
+        return "mid"
+    try:
+        price = float(prompt_price)
+    except (ValueError, TypeError):
+        return "mid"
+    if price == 0:
+        return "free"
+    if price < 0.000001:
+        return "cheap"
+    if price < 0.00001:
+        return "mid"
+    return "expensive"
+
+
 _OR_PROVIDER_NAMES: dict[str, str] = {
     "anthropic": "Anthropic",
     "openai": "OpenAI",
@@ -199,11 +219,13 @@ class AIManager:
                 context_length = m.get("context_length")
                 caps = _infer_openrouter_capabilities(model_id, name, description, context_length)
                 real_provider = _extract_openrouter_provider(model_id)
+                cost_tier = _get_cost_tier(m.get("pricing"))
                 models.append({
                     "id": model_id,
                     "name": name,
                     "provider": "openrouter",
                     "real_provider": real_provider,
+                    "cost_tier": cost_tier,
                     "context_length": context_length,
                     "pricing": m.get("pricing"),
                     "capabilities": [c.value for c in caps],
@@ -219,6 +241,8 @@ class AIManager:
                     "id": mi.id,
                     "name": mi.name,
                     "provider": "openrouter",
+                    "real_provider": "OpenAI" if "openai" in mi.id else "Anthropic" if "claude" in mi.id else "Meta" if "llama" in mi.id else "Google" if "gemini" in mi.id else "OpenRouter",
+                    "cost_tier": "cheap" if "mini" in mi.id or "haiku" in mi.id or "flash" in mi.id else "mid" if "gemini" in mi.id or "gpt-4o" in mi.id else "expensive" if "opus" in mi.id else "mid",
                     "capabilities": [c.value for c in mi.capabilities],
                 }
                 for mi in instance.list_models()

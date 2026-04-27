@@ -294,6 +294,7 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
               {currentModelCapabilities().map(cap => (
                 <CapabilityIcon key={cap} capability={cap} className="h-3 w-3 text-muted-foreground" />
               ))}
+              <CostTierIcon tier={availableModels.find(m => m.id === model && m.provider === provider)?.cost_tier} className="text-muted-foreground" />
             </div>
           </div>
           <button
@@ -350,6 +351,7 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
                         {m.capabilities?.map(cap => (
                           <CapabilityIcon key={cap} capability={cap} className="h-3 w-3 text-muted-foreground" />
                         ))}
+                        <CostTierIcon tier={m.cost_tier} className="text-muted-foreground" />
                       </div>
                     </button>
                   ))}
@@ -574,6 +576,31 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
         )}
       </div>
     </div>
+  )
+}
+
+function CostTierIcon({ tier, className = '' }: { tier?: string; className?: string }) {
+  if (!tier) return null
+  const labels: Record<string, string> = {
+    free: 'Free',
+    cheap: 'Cheap',
+    mid: 'Mid',
+    expensive: 'Expensive',
+  }
+  const text = (() => {
+    switch (tier) {
+      case 'free': return '̶$̶'
+      case 'cheap': return '$'
+      case 'mid': return '$$'
+      case 'expensive': return '$$$'
+      default: return null
+    }
+  })()
+  if (!text) return null
+  return (
+    <span title={labels[tier] || tier} className={`text-[10px] font-bold tabular-nums ${className}`}>
+      {text}
+    </span>
   )
 }
 
