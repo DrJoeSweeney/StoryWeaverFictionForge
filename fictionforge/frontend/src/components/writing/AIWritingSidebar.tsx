@@ -7,7 +7,8 @@ import {
   Wand2, Sparkles, RefreshCw, Type, ArrowRight,
   ChevronLeft, Loader2, Check, Zap, BookOpen,
   MessageSquare, Trash2,
-  Brain, Feather, Globe, Eye, Code, ScrollText, ChevronDown
+  Brain, Feather, Globe, Eye, Code, ScrollText, ChevronDown,
+  Music, Image
 } from 'lucide-react'
 
 interface AIWritingSidebarProps {
@@ -574,6 +575,8 @@ function CapabilityIcon({ capability, className }: { capability: string; classNa
     vision: 'Vision',
     coding: 'Coding',
     long_context: 'Long Context',
+    audio: 'Audio',
+    image: 'Image',
   }
   const icon = (() => {
     switch (capability) {
@@ -583,6 +586,8 @@ function CapabilityIcon({ capability, className }: { capability: string; classNa
       case 'vision': return <Eye className={className} />
       case 'coding': return <Code className={className} />
       case 'long_context': return <ScrollText className={className} />
+      case 'audio': return <Music className={className} />
+      case 'image': return <Image className={className} />
       default: return null
     }
   })()

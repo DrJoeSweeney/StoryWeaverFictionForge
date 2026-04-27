@@ -15,6 +15,8 @@ class ModelCapability(str, Enum):
     VISION = "vision"
     LONG_CONTEXT = "long_context"
     WEB_SEARCH = "web_search"
+    AUDIO = "audio"
+    IMAGE = "image"
 
 
 class ModelInfo(BaseModel):

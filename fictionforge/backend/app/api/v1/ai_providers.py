@@ -22,6 +22,15 @@ async def list_openrouter_models():
     return ai_manager.fetch_openrouter_models()
 
 
+@router.post("/openrouter-models/refresh")
+async def refresh_openrouter_models(
+    current_user: User = Depends(get_current_active_user)
+):
+    """Force refresh OpenRouter model list from upstream API."""
+    models = ai_manager.fetch_openrouter_models(force_refresh=True)
+    return {"count": len(models), "models": models}
+
+
 @router.get("/active-models")
 async def list_active_models(
     db: AsyncSession = Depends(get_db),
@@ -60,6 +69,7 @@ async def list_active_models(
                         "id": m.id,
                         "name": m.name,
                         "provider": m.provider,
+                        "capabilities": [c.value for c in m.capabilities],
                     }
                     for m in models
                 ])

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 import { useUISettings } from '@/hooks/useUISettings'
-import { Key, Trash2, Plus, Bot, Database, FolderOpen, Save, TestTube, CheckCircle, XCircle, Sun, Moon, Monitor, Type, Heading, Loader, List, Brain } from 'lucide-react'
+import { Key, Trash2, Plus, Bot, Database, FolderOpen, Save, TestTube, CheckCircle, XCircle, Sun, Moon, Monitor, Type, Heading, Loader, List, Brain, RefreshCw, Globe, Eye, Code, ScrollText, Feather, Music, Image } from 'lucide-react'
 
 interface AIConfig {
   id: string
@@ -128,6 +128,13 @@ export default function SettingsPage() {
       const msg = err.response?.data?.detail || err.message || 'Test failed'
       setTestResult({ provider: testingProvider || '', success: false, message: msg })
       setTestingProvider(null)
+    },
+  })
+
+  const refreshModelsMutation = useMutation({
+    mutationFn: () => api.post('/ai-providers/openrouter-models/refresh'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['ai-active-models'] })
     },
   })
 
@@ -378,6 +385,17 @@ export default function SettingsPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
+                  {config.provider === 'openrouter' && (
+                    <button
+                      onClick={() => refreshModelsMutation.mutate()}
+                      disabled={refreshModelsMutation.isPending}
+                      className="flex items-center gap-1 px-2 py-1 text-xs border rounded hover:bg-accent disabled:opacity-50"
+                      title="Fetch latest OpenRouter models"
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 ${refreshModelsMutation.isPending ? 'animate-spin' : ''}`} />
+                      {refreshModelsMutation.isPending ? 'Updating...' : 'Update Models'}
+                    </button>
+                  )}
                   <button
                     onClick={() => { setTestResult(null); setTestingProvider(config.provider); testMutation.mutate(config.provider) }}
                     disabled={testMutation.isPending}
@@ -440,7 +458,13 @@ export default function SettingsPage() {
                       <p className="font-medium text-sm">{model.name}</p>
                       <div className="flex items-center gap-1">
                         {model.capabilities?.includes('reasoning') && <span title="Reasoning"><Brain className="h-3 w-3 text-muted-foreground" /></span>}
-                        {model.capabilities?.includes('writing') && <span title="Writing"><Type className="h-3 w-3 text-muted-foreground" /></span>}
+                        {model.capabilities?.includes('writing') && <span title="Writing"><Feather className="h-3 w-3 text-muted-foreground" /></span>}
+                        {model.capabilities?.includes('web_search') && <span title="Web Search"><Globe className="h-3 w-3 text-muted-foreground" /></span>}
+                        {model.capabilities?.includes('vision') && <span title="Vision"><Eye className="h-3 w-3 text-muted-foreground" /></span>}
+                        {model.capabilities?.includes('coding') && <span title="Coding"><Code className="h-3 w-3 text-muted-foreground" /></span>}
+                        {model.capabilities?.includes('long_context') && <span title="Long Context"><ScrollText className="h-3 w-3 text-muted-foreground" /></span>}
+                        {model.capabilities?.includes('audio') && <span title="Audio"><Music className="h-3 w-3 text-muted-foreground" /></span>}
+                        {model.capabilities?.includes('image') && <span title="Image"><Image className="h-3 w-3 text-muted-foreground" /></span>}
                       </div>
                     </div>
                     <p className="text-xs text-muted-foreground capitalize">{model.provider}</p>
