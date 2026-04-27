@@ -302,7 +302,11 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
             className="w-full px-2 py-1.5 border rounded-md bg-background text-sm flex items-center justify-between hover:bg-accent/50"
           >
             <span className="truncate">
-              {availableModels.find(m => m.id === model && m.provider === provider)?.name || 'Select model...'}
+              {(() => {
+                const m = availableModels.find(m => m.id === model && m.provider === provider)
+                if (!m) return 'Select model...'
+                return m.real_provider ? `${m.name} (${m.real_provider})` : m.name
+              })()}
             </span>
             <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${modelDropdownOpen ? 'rotate-180' : ''}`} />
           </button>
@@ -311,16 +315,22 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
               {availableModels.length === 0 && (
                 <div className="px-3 py-2 text-sm text-muted-foreground">No models — add API key in Settings</div>
               )}
-              {Object.entries(
-                availableModels.reduce((acc, m) => {
-                  if (!acc[m.provider]) acc[m.provider] = []
-                  acc[m.provider].push(m)
+              {(() => {
+                // Group by real provider (or provider for direct configs), sorted alphabetically
+                const grouped = availableModels.reduce((acc, m) => {
+                  const groupKey = (m as any).real_provider || m.provider
+                  if (!acc[groupKey]) acc[groupKey] = []
+                  acc[groupKey].push(m)
                   return acc
                 }, {} as Record<string, typeof availableModels>)
-              ).map(([prov, models]) => (
+                // Sort each group's models by name
+                Object.values(grouped).forEach(list => list.sort((a, b) => a.name.localeCompare(b.name)))
+                // Sort provider keys alphabetically
+                return Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b))
+              })().map(([prov, models]) => (
                 <div key={prov}>
                   <div className="px-3 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-secondary/50 sticky top-0">
-                    {prov.charAt(0).toUpperCase() + prov.slice(1)}
+                    {prov}
                   </div>
                   {models.map((m) => (
                     <button
@@ -335,7 +345,7 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
                         m.id === model && m.provider === provider ? 'bg-primary/10 text-primary' : ''
                       }`}
                     >
-                      <span className="truncate">{m.name}</span>
+                      <span className="truncate">{m.real_provider ? `${m.name} (${m.real_provider})` : m.name}</span>
                       <div className="flex items-center gap-1 shrink-0 ml-2">
                         {m.capabilities?.map(cap => (
                           <CapabilityIcon key={cap} capability={cap} className="h-3 w-3 text-muted-foreground" />

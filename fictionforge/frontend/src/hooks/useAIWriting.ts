@@ -6,6 +6,7 @@ interface AIModel {
   id: string
   name: string
   provider: string
+  real_provider?: string
   capabilities: string[]
 }
 

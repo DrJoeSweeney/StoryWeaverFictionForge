@@ -15,6 +15,7 @@ interface AIModel {
   id: string
   name: string
   provider: string
+  real_provider?: string
   capabilities: string[]
 }
 
@@ -451,28 +452,45 @@ export default function SettingsPage() {
                 <span className="text-sm">Loading available models...</span>
               </div>
             ) : activeModels && activeModels.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-[500px] overflow-y-auto">
-                {activeModels.map((model) => (
-                  <div key={model.id} className="p-3 bg-card rounded-lg border">
-                    <div className="flex items-center justify-between">
-                      <p className="font-medium text-sm">{model.name}</p>
-                      <div className="flex items-center gap-1">
-                        {model.capabilities?.includes('reasoning') && <span title="Reasoning"><Brain className="h-3 w-3 text-muted-foreground" /></span>}
-                        {model.capabilities?.includes('writing') && <span title="Writing"><Feather className="h-3 w-3 text-muted-foreground" /></span>}
-                        {model.capabilities?.includes('web_search') && <span title="Web Search"><Globe className="h-3 w-3 text-muted-foreground" /></span>}
-                        {model.capabilities?.includes('vision') && <span title="Vision"><Eye className="h-3 w-3 text-muted-foreground" /></span>}
-                        {model.capabilities?.includes('coding') && <span title="Coding"><Code className="h-3 w-3 text-muted-foreground" /></span>}
-                        {model.capabilities?.includes('long_context') && <span title="Long Context"><ScrollText className="h-3 w-3 text-muted-foreground" /></span>}
-                        {model.capabilities?.includes('audio') && <span title="Audio"><Music className="h-3 w-3 text-muted-foreground" /></span>}
-                        {model.capabilities?.includes('image') && <span title="Image"><Image className="h-3 w-3 text-muted-foreground" /></span>}
-                      </div>
-                    </div>
-                    <p className="text-xs text-muted-foreground capitalize">{model.provider}</p>
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {model.capabilities?.map((cap) => (
-                        <span key={cap} className="text-[10px] px-1.5 py-0.5 rounded-full bg-secondary text-muted-foreground">
-                          {cap.replace('_', ' ')}
-                        </span>
+              <div className="space-y-4 max-h-[500px] overflow-y-auto">
+                {(() => {
+                  const grouped = activeModels.reduce((acc, m) => {
+                    const key = (m as any).real_provider || m.provider
+                    if (!acc[key]) acc[key] = []
+                    acc[key].push(m)
+                    return acc
+                  }, {} as Record<string, typeof activeModels>)
+                  Object.values(grouped).forEach(list => list.sort((a, b) => a.name.localeCompare(b.name)))
+                  return Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b))
+                })().map(([prov, models]) => (
+                  <div key={prov}>
+                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 sticky top-0 bg-background py-1">
+                      {prov}
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      {models.map((model) => (
+                        <div key={model.id} className="p-3 bg-card rounded-lg border">
+                          <div className="flex items-center justify-between">
+                            <p className="font-medium text-sm">{model.real_provider ? `${model.name} (${model.real_provider})` : model.name}</p>
+                            <div className="flex items-center gap-1">
+                              {model.capabilities?.includes('reasoning') && <span title="Reasoning"><Brain className="h-3 w-3 text-muted-foreground" /></span>}
+                              {model.capabilities?.includes('writing') && <span title="Writing"><Feather className="h-3 w-3 text-muted-foreground" /></span>}
+                              {model.capabilities?.includes('web_search') && <span title="Web Search"><Globe className="h-3 w-3 text-muted-foreground" /></span>}
+                              {model.capabilities?.includes('vision') && <span title="Vision"><Eye className="h-3 w-3 text-muted-foreground" /></span>}
+                              {model.capabilities?.includes('coding') && <span title="Coding"><Code className="h-3 w-3 text-muted-foreground" /></span>}
+                              {model.capabilities?.includes('long_context') && <span title="Long Context"><ScrollText className="h-3 w-3 text-muted-foreground" /></span>}
+                              {model.capabilities?.includes('audio') && <span title="Audio"><Music className="h-3 w-3 text-muted-foreground" /></span>}
+                              {model.capabilities?.includes('image') && <span title="Image"><Image className="h-3 w-3 text-muted-foreground" /></span>}
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {model.capabilities?.map((cap) => (
+                              <span key={cap} className="text-[10px] px-1.5 py-0.5 rounded-full bg-secondary text-muted-foreground">
+                                {cap.replace('_', ' ')}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
                       ))}
                     </div>
                   </div>

@@ -35,6 +35,53 @@ def decrypt_credentials(encrypted: str) -> dict:
     return json.loads(f.decrypt(encrypted.encode()).decode())
 
 
+_OR_PROVIDER_NAMES: dict[str, str] = {
+    "anthropic": "Anthropic",
+    "openai": "OpenAI",
+    "google": "Google",
+    "meta-llama": "Meta",
+    "mistralai": "Mistral AI",
+    "x-ai": "xAI",
+    "deepseek": "DeepSeek",
+    "qwen": "Alibaba",
+    "moonshotai": "Moonshot AI",
+    "nvidia": "NVIDIA",
+    "perplexity": "Perplexity",
+    "nousresearch": "Nous Research",
+    "microsoft": "Microsoft",
+    "cohere": "Cohere",
+    "01-ai": "01.AI",
+    "huggingface": "Hugging Face",
+    "recursal": "Recursal",
+    "rwkv": "RWKV",
+    "neversleep": "NeverSleep",
+    "infermatic": "Infermatic",
+    "openrouter": "OpenRouter",
+    "liquid": "Liquid AI",
+    "thedrone": "The Drone",
+    "pygmalionai": "PygmalionAI",
+    "fireworks": "Fireworks",
+    "together": "Together AI",
+    "hyperbolic": "Hyperbolic",
+    "liuhaotian": "Liuhaotian",
+    "raifile": "Raifile",
+    " Shuttleai": "ShuttleAI",
+    "aion-labs": "Aion Labs",
+    "bigcode": "BigCode",
+    "allenai": "Allen AI",
+    "rekaai": "Reka AI",
+    "lizpreciatior": "Lizpreciatior",
+    "intelligent": "Intelligent",
+    "kimi": "Moonshot AI",
+}
+
+
+def _extract_openrouter_provider(model_id: str) -> str:
+    """Extract the real provider name from an OpenRouter model ID like 'anthropic/claude-3.7-sonnet'."""
+    org = model_id.split("/")[0] if "/" in model_id else ""
+    return _OR_PROVIDER_NAMES.get(org, org.capitalize() if org else "Unknown")
+
+
 def _infer_openrouter_capabilities(model_id: str, name: str, description: str | None, context_length: int | None) -> list[ModelCapability]:
     """Infer model capabilities from OpenRouter metadata."""
     caps: set[ModelCapability] = set()
@@ -151,10 +198,12 @@ class AIManager:
                 description = m.get("description", "")
                 context_length = m.get("context_length")
                 caps = _infer_openrouter_capabilities(model_id, name, description, context_length)
+                real_provider = _extract_openrouter_provider(model_id)
                 models.append({
                     "id": model_id,
                     "name": name,
                     "provider": "openrouter",
+                    "real_provider": real_provider,
                     "context_length": context_length,
                     "pricing": m.get("pricing"),
                     "capabilities": [c.value for c in caps],
