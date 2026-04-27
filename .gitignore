@@ -60,6 +60,7 @@ Thumbs.db
 # User content / data directories
 writeforge/backend/data/
 writeforge/backend/vault/
+writeforge/backend/static/
 
 # Logs
 logs/
