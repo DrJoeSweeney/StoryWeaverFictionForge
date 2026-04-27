@@ -1,5 +1,6 @@
 import { useRef, useState, useEffect } from 'react'
 import { useAIWriting } from '@/hooks/useAIWriting'
+import { useModelPreferences } from '@/hooks/useModelPreferences'
 import api from '@/api/client'
 import AgenticStatus from './AgenticStatus'
 import SpeechMicButton from '@/components/SpeechMicButton'
@@ -8,7 +9,7 @@ import {
   ChevronLeft, Loader2, Check, Zap, BookOpen,
   MessageSquare, Trash2,
   Brain, Feather, Globe, Eye, Code, ScrollText, ChevronDown,
-  Music, Image, EyeOff
+  Music, Image, EyeOff, Star
 } from 'lucide-react'
 
 interface AIWritingSidebarProps {
@@ -57,6 +58,8 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
     applySkill,
     consultedDocs,
   } = useAIWriting()
+
+  const { isHidden, isStarred } = useModelPreferences()
 
   const chatEndRef = useRef<HTMLDivElement>(null)
   const chatContainerRef = useRef<HTMLDivElement>(null)
@@ -318,47 +321,62 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
                 <div className="px-3 py-2 text-sm text-muted-foreground">No models — add API key in Settings</div>
               )}
               {(() => {
-                // Group by real provider (or provider for direct configs), sorted alphabetically
-                const grouped = availableModels.reduce((acc, m) => {
+                const visible = availableModels.filter(m => !isHidden(m.id))
+                const starred = visible.filter(m => isStarred(m.id)).sort((a, b) => a.name.localeCompare(b.name))
+                const unstarred = visible.filter(m => !isStarred(m.id))
+                // Group unstarred by real provider, sorted alphabetically
+                const grouped = unstarred.reduce((acc, m) => {
                   const groupKey = (m as any).real_provider || m.provider
                   if (!acc[groupKey]) acc[groupKey] = []
                   acc[groupKey].push(m)
                   return acc
                 }, {} as Record<string, typeof availableModels>)
-                // Sort each group's models by name
                 Object.values(grouped).forEach(list => list.sort((a, b) => a.name.localeCompare(b.name)))
-                // Sort provider keys alphabetically
-                return Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b))
-              })().map(([prov, models]) => (
-                <div key={prov}>
-                  <div className="px-3 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-secondary/50 sticky top-0">
-                    {prov}
-                  </div>
-                  {models.map((m) => (
-                    <button
-                      key={m.id}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => {
-                        setProvider(m.provider)
-                        setModel(m.id)
-                        setModelDropdownOpen(false)
-                      }}
-                      className={`w-full px-3 py-2 text-sm flex items-center justify-between hover:bg-accent ${
-                        m.id === model && m.provider === provider ? 'bg-primary/10 text-primary' : ''
-                      }`}
-                    >
-                      <span className="truncate">{m.real_provider ? `${m.name} (${m.real_provider})` : m.name}</span>
-                      <div className="flex items-center gap-1 shrink-0 ml-2">
-                        {m.capabilities?.map(cap => (
-                          <CapabilityIcon key={cap} capability={cap} className="h-3 w-3 text-muted-foreground" />
+                const groupedEntries = Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b))
+                return (
+                  <>
+                    {starred.length > 0 && (
+                      <div>
+                        <div className="px-3 py-1 text-[10px] font-semibold text-yellow-600 uppercase tracking-wider bg-yellow-50 dark:bg-yellow-900/20 sticky top-0 flex items-center gap-1">
+                          <Star className="h-3 w-3 fill-yellow-400 text-yellow-400" />
+                          Starred
+                        </div>
+                        {starred.map((m) => (
+                          <ModelDropdownItem
+                            key={m.id}
+                            m={m}
+                            selected={m.id === model && m.provider === provider}
+                            onSelect={() => {
+                              setProvider(m.provider)
+                              setModel(m.id)
+                              setModelDropdownOpen(false)
+                            }}
+                          />
                         ))}
-                        <TrainingIcon trainsOnData={m.trains_on_data} className="text-muted-foreground" />
-                        <CostTierIcon tier={m.cost_tier} className="text-muted-foreground" />
                       </div>
-                    </button>
-                  ))}
-                </div>
-              ))}
+                    )}
+                    {groupedEntries.map(([prov, models]) => (
+                      <div key={prov}>
+                        <div className="px-3 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-secondary/50 sticky top-0">
+                          {prov}
+                        </div>
+                        {models.map((m) => (
+                          <ModelDropdownItem
+                            key={m.id}
+                            m={m}
+                            selected={m.id === model && m.provider === provider}
+                            onSelect={() => {
+                              setProvider(m.provider)
+                              setModel(m.id)
+                              setModelDropdownOpen(false)
+                            }}
+                          />
+                        ))}
+                      </div>
+                    ))}
+                  </>
+                )
+              })()}
             </div>
           )}
         </div>
@@ -578,6 +596,29 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
         )}
       </div>
     </div>
+  )
+}
+
+function ModelDropdownItem({ m, selected, onSelect }: { m: any; selected: boolean; onSelect: () => void }) {
+  return (
+    <button
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onSelect}
+      className={`w-full px-3 py-2 text-sm flex items-center justify-between hover:bg-accent ${
+        selected ? 'bg-primary/10 text-primary' : ''
+      }`}
+    >
+      <span className="truncate flex items-center gap-1">
+        {m.real_provider ? `${m.name} (${m.real_provider})` : m.name}
+      </span>
+      <div className="flex items-center gap-1 shrink-0 ml-2">
+        {m.capabilities?.map((cap: string) => (
+          <CapabilityIcon key={cap} capability={cap} className="h-3 w-3 text-muted-foreground" />
+        ))}
+        <TrainingIcon trainsOnData={m.trains_on_data} className="text-muted-foreground" />
+        <CostTierIcon tier={m.cost_tier} className="text-muted-foreground" />
+      </div>
+    </button>
   )
 }
 

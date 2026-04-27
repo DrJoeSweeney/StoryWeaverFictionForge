@@ -2,7 +2,10 @@ import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 import { useUISettings } from '@/hooks/useUISettings'
-import { Key, Trash2, Plus, Bot, Database, FolderOpen, Save, TestTube, CheckCircle, XCircle, Sun, Moon, Monitor, Type, Heading, Loader, List, Brain, RefreshCw, Globe, Eye, Code, ScrollText, Feather, Music, Image, EyeOff } from 'lucide-react'
+import { useModelPreferences } from '@/hooks/useModelPreferences'
+import {
+  Key, Trash2, Plus, Bot, TestTube, CheckCircle, XCircle, Sun, Moon, Monitor, Type, Heading, Loader, List, Brain, RefreshCw, Globe, Eye, Code, ScrollText, Feather, Music, Image, EyeOff, Star
+} from 'lucide-react'
 
 interface AIConfig {
   id: string
@@ -79,11 +82,10 @@ function CostTierIcon({ tier }: { tier?: string }) {
 
 export default function SettingsPage() {
   const { settings, setSettings } = useUISettings()
+  const { toggleHidden, setHiddenForVendor, toggleStarred, isHidden, isStarred } = useModelPreferences()
   const [showForm, setShowForm] = useState(false)
   const [provider, setProvider] = useState('anthropic')
   const [apiKey, setApiKey] = useState('')
-  const [storageMode, setStorageMode] = useState<'database' | 'obsidian'>('database')
-  const [vaultPath, setVaultPath] = useState('')
   const [testResult, setTestResult] = useState<{provider: string; success: boolean; message: string} | null>(null)
   const [testingProvider, setTestingProvider] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -185,62 +187,6 @@ export default function SettingsPage() {
           <Bot className="h-6 w-6" />
           Settings
         </h1>
-      </div>
-
-      <div className="space-y-4 p-4 bg-card rounded-lg border">
-        <h2 className="text-lg font-semibold flex items-center gap-2">
-          <Database className="h-5 w-5" />
-          Storage Mode
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          Choose how FictionForge stores your project data.
-        </p>
-        <div className="flex gap-2 p-1 bg-background rounded-md border">
-          <button
-            onClick={() => setStorageMode('database')}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded text-sm font-medium transition-colors ${
-              storageMode === 'database'
-                ? 'bg-primary text-primary-foreground'
-                : 'hover:bg-accent'
-            }`}
-          >
-            <Database className="h-4 w-4" />
-            Database (SQLite)
-          </button>
-          <button
-            onClick={() => setStorageMode('obsidian')}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded text-sm font-medium transition-colors ${
-              storageMode === 'obsidian'
-                ? 'bg-primary text-primary-foreground'
-                : 'hover:bg-accent'
-            }`}
-          >
-            <FolderOpen className="h-4 w-4" />
-            Obsidian Vault
-          </button>
-        </div>
-        {storageMode === 'obsidian' && (
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Vault Path</label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={vaultPath}
-                onChange={(e) => setVaultPath(e.target.value)}
-                placeholder="/path/to/your/obsidian/vault"
-                className="flex-1 px-3 py-2 border rounded-md bg-background text-sm"
-              />
-              <button className="px-3 py-2 bg-primary text-primary-foreground rounded-md text-sm flex items-center gap-1">
-                <Save className="h-4 w-4" />
-                Save
-              </button>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              In Obsidian mode, all project data is stored as Markdown files in your vault folder.
-              Characters, story bible, manuscripts, and outlines become .md files with YAML frontmatter.
-            </p>
-          </div>
-        )}
       </div>
 
       <div className="space-y-4 p-4 bg-card rounded-lg border">
@@ -466,13 +412,13 @@ export default function SettingsPage() {
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <List className="h-5 w-5" />
-            Available Models
+            Manage Models
           </h2>
           <button
             onClick={() => setShowModels(!showModels)}
             className="flex items-center gap-2 px-3 py-2 bg-primary text-primary-foreground rounded-md text-sm"
           >
-            {showModels ? 'Hide Models' : 'Show Models for My Keys'}
+            {showModels ? 'Hide Models' : 'Manage Models'}
           </button>
         </div>
 
@@ -494,41 +440,97 @@ export default function SettingsPage() {
                   }, {} as Record<string, typeof activeModels>)
                   Object.values(grouped).forEach(list => list.sort((a, b) => a.name.localeCompare(b.name)))
                   return Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b))
-                })().map(([prov, models]) => (
-                  <div key={prov}>
-                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 sticky top-0 bg-background py-1">
-                      {prov}
-                    </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                      {models.map((model) => (
-                        <div key={model.id} className="p-3 bg-card rounded-lg border">
-                          <div className="flex items-center justify-between">
-                            <p className="font-medium text-sm">{model.real_provider ? `${model.name} (${model.real_provider})` : model.name}</p>
-                            <div className="flex items-center gap-1">
-                              {model.capabilities?.includes('reasoning') && <span title="Reasoning"><Brain className="h-3 w-3 text-muted-foreground" /></span>}
-                              {model.capabilities?.includes('writing') && <span title="Writing"><Feather className="h-3 w-3 text-muted-foreground" /></span>}
-                              {model.capabilities?.includes('web_search') && <span title="Web Search"><Globe className="h-3 w-3 text-muted-foreground" /></span>}
-                              {model.capabilities?.includes('vision') && <span title="Vision"><Eye className="h-3 w-3 text-muted-foreground" /></span>}
-                              {model.capabilities?.includes('coding') && <span title="Coding"><Code className="h-3 w-3 text-muted-foreground" /></span>}
-                              {model.capabilities?.includes('long_context') && <span title="Long Context"><ScrollText className="h-3 w-3 text-muted-foreground" /></span>}
-                              {model.capabilities?.includes('audio') && <span title="Audio"><Music className="h-3 w-3 text-muted-foreground" /></span>}
-                              {model.capabilities?.includes('image') && <span title="Image"><Image className="h-3 w-3 text-muted-foreground" /></span>}
-                              <TrainingIcon trainsOnData={model.trains_on_data} />
-                              <CostTierIcon tier={model.cost_tier} />
+                })().map(([prov, models]) => {
+                  const allHidden = models.every(m => isHidden(m.id))
+                  const someHidden = models.some(m => isHidden(m.id))
+                  return (
+                    <div key={prov}>
+                      <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 sticky top-0 bg-background py-1 flex items-center gap-2">
+                        {prov}
+                        <button
+                          onClick={() => setHiddenForVendor(models.map(m => m.id), !someHidden)}
+                          className="p-0.5 rounded hover:bg-accent"
+                          title={allHidden ? 'Show all models from this vendor' : 'Hide all models from this vendor'}
+                        >
+                          {allHidden ? (
+                            <EyeOff className="h-3 w-3 text-muted-foreground" />
+                          ) : someHidden ? (
+                            <EyeOff className="h-3 w-3 text-muted-foreground/60" />
+                          ) : (
+                            <Eye className="h-3 w-3 text-muted-foreground" />
+                          )}
+                        </button>
+                      </h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        {models.map((model) => {
+                          const hidden = isHidden(model.id)
+                          const starred = isStarred(model.id)
+                          return (
+                            <div
+                              key={model.id}
+                              className={`p-3 rounded-lg border transition-opacity ${
+                                hidden
+                                  ? 'bg-card/40 border-border/40 opacity-50'
+                                  : 'bg-card border'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <p className={`font-medium text-sm ${hidden ? 'text-muted-foreground' : ''}`}>
+                                  {model.real_provider ? `${model.name} (${model.real_provider})` : model.name}
+                                </p>
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => toggleStarred(model.id)}
+                                    className="p-0.5 rounded hover:bg-accent"
+                                    title={starred ? 'Unstar model' : 'Star model (shows at top of list)'}
+                                  >
+                                    <Star
+                                      className={`h-3.5 w-3.5 ${
+                                        starred
+                                          ? 'fill-yellow-400 text-yellow-400'
+                                          : 'text-muted-foreground'
+                                      }`}
+                                    />
+                                  </button>
+                                  <button
+                                    onClick={() => toggleHidden(model.id)}
+                                    className="p-0.5 rounded hover:bg-accent"
+                                    title={hidden ? 'Show model in AI Assistant' : 'Hide model from AI Assistant'}
+                                  >
+                                    {hidden ? (
+                                      <EyeOff className="h-3.5 w-3.5 text-muted-foreground" />
+                                    ) : (
+                                      <Eye className="h-3.5 w-3.5 text-muted-foreground" />
+                                    )}
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1 mt-1">
+                                {model.capabilities?.includes('reasoning') && <span title="Reasoning"><Brain className="h-3 w-3 text-muted-foreground" /></span>}
+                                {model.capabilities?.includes('writing') && <span title="Writing"><Feather className="h-3 w-3 text-muted-foreground" /></span>}
+                                {model.capabilities?.includes('web_search') && <span title="Web Search"><Globe className="h-3 w-3 text-muted-foreground" /></span>}
+                                {model.capabilities?.includes('vision') && <span title="Vision"><Eye className="h-3 w-3 text-muted-foreground" /></span>}
+                                {model.capabilities?.includes('coding') && <span title="Coding"><Code className="h-3 w-3 text-muted-foreground" /></span>}
+                                {model.capabilities?.includes('long_context') && <span title="Long Context"><ScrollText className="h-3 w-3 text-muted-foreground" /></span>}
+                                {model.capabilities?.includes('audio') && <span title="Audio"><Music className="h-3 w-3 text-muted-foreground" /></span>}
+                                {model.capabilities?.includes('image') && <span title="Image"><Image className="h-3 w-3 text-muted-foreground" /></span>}
+                                <TrainingIcon trainsOnData={model.trains_on_data} />
+                                <CostTierIcon tier={model.cost_tier} />
+                              </div>
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {model.capabilities?.map((cap) => (
+                                  <span key={cap} className="text-[10px] px-1.5 py-0.5 rounded-full bg-secondary text-muted-foreground">
+                                    {cap.replace('_', ' ')}
+                                  </span>
+                                ))}
+                              </div>
                             </div>
-                          </div>
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {model.capabilities?.map((cap) => (
-                              <span key={cap} className="text-[10px] px-1.5 py-0.5 rounded-full bg-secondary text-muted-foreground">
-                                {cap.replace('_', ' ')}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
+                          )
+                        })}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             ) : (
               <p className="text-sm text-muted-foreground text-center py-4">
