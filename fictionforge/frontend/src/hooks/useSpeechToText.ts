@@ -50,19 +50,30 @@ export function useSpeechToText() {
     recognition.interimResults = true
 
     let finalTranscript = ''
+    let lastProcessedIndex = -1
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
       let interim = ''
-      for (let i = event.results.length - 1; i >= 0; i--) {
+      let newFinalText = ''
+
+      for (let i = 0; i < event.results.length; i++) {
         const result = event.results[i]
         if (result.isFinal) {
-          finalTranscript += result[0].transcript
+          if (i > lastProcessedIndex) {
+            newFinalText += result[0].transcript
+            lastProcessedIndex = i
+          }
         } else {
           interim = result[0].transcript
         }
       }
+
+      if (newFinalText) {
+        finalTranscript += newFinalText
+        onResult(newFinalText)
+      }
+
       setTranscript(finalTranscript + interim)
-      onResult(finalTranscript + interim)
     }
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
@@ -84,6 +95,8 @@ export function useSpeechToText() {
       recognition.start()
       setIsListening(true)
       setTranscript('')
+      lastProcessedIndex = -1
+      finalTranscript = ''
     } catch (err) {
       console.error('Failed to start speech recognition:', err)
       setIsListening(false)
