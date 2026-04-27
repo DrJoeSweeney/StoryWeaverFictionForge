@@ -160,14 +160,18 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
       },
       replaceSelection: (text: string) => {
         if (!editor || editor.isDestroyed) return
-        editor.chain().focus().insertContent(text).run()
+        // Convert markdown to HTML so AI output renders properly in the editor
+        const html = postprocessWikiLinksAndTags(marked.parse(text, { async: false }) as string)
+        editor.chain().focus().insertContent(html).run()
         // Clear the persistent highlight after replacement
         const tr = editor.state.tr.setMeta(persistentSelectionKey, { action: 'clear' })
         editor.view.dispatch(tr)
       },
       insertAtCursor: (text: string) => {
         if (!editor || editor.isDestroyed) return
-        editor.chain().focus().insertContent(text).run()
+        // Convert markdown to HTML so AI output renders properly in the editor
+        const html = postprocessWikiLinksAndTags(marked.parse(text, { async: false }) as string)
+        editor.chain().focus().insertContent(html).run()
       },
       focus: () => {
         if (!editor || editor.isDestroyed) return
