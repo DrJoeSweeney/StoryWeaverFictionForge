@@ -57,6 +57,10 @@ Thumbs.db
 *.sqlite
 *.sqlite3
 
+# User content / data directories
+writeforge/backend/data/
+writeforge/backend/vault/
+
 # Logs
 logs/
 *.log
