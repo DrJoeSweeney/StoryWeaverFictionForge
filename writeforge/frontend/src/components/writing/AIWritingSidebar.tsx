@@ -4,7 +4,9 @@ import api from '@/api/client'
 import {
   Wand2, Sparkles, RefreshCw, Type, ArrowRight,
   ChevronLeft, Loader2, Check, Zap, BookOpen,
-  MessageSquare, Trash2, FilePlus, X
+  MessageSquare, Trash2, FilePlus, X,
+  Brain, Feather, Globe, Eye, Code, ScrollText, ChevronDown,
+  Lightbulb
 } from 'lucide-react'
 
 interface AIWritingSidebarProps {
@@ -32,6 +34,7 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
   const [quickActionLoading, setQuickActionLoading] = useState<string | null>(null)
   const [quickActionError, setQuickActionError] = useState<string | null>(null)
   const [isCreating, setIsCreating] = useState(false)
+  const cancelRef = useRef(false)
   const {
     action, setAction,
     customPrompt, setCustomPrompt,
@@ -46,13 +49,19 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
     generateDocumentContent,
     availableModels,
     skills,
-    generate,
+    agenticGenerate,
+    agenticExecute,
     applySkill,
-    execute,
+    reasoningLog,
+    lastTier,
+    consultedDocs,
   } = useAIWriting()
 
   const chatEndRef = useRef<HTMLDivElement>(null)
   const chatContainerRef = useRef<HTMLDivElement>(null)
+  const modelDropdownRef = useRef<HTMLDivElement>(null)
+  const [modelDropdownOpen, setModelDropdownOpen] = useState(false)
+  const [showReasoning, setShowReasoning] = useState(false)
 
   useEffect(() => {
     if (chatEndRef.current) {
@@ -60,7 +69,23 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
     }
   }, [chatMessages, loading, pendingPlan, creatingIndex])
 
-  const handleGenerate = () => generate(getSelectedText(), getFullContext(), projectId)
+  // Close model dropdown on outside click
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (modelDropdownRef.current && !modelDropdownRef.current.contains(e.target as Node)) {
+        setModelDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const currentModelCapabilities = () => {
+    const m = availableModels.find(m => m.id === model && m.provider === provider)
+    return m?.capabilities || []
+  }
+
+  const handleGenerate = () => agenticGenerate(getSelectedText(), getFullContext(), projectId)
   const handleApplySkill = (skillId: string) => applySkill(skillId, getSelectedText(), getFullContext(), projectId)
 
   const handleQuickAction = async (actionId: string) => {
@@ -72,7 +97,7 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
     try {
       const selectedText = getSelectedText()
       const fullContext = getFullContext()
-      const text = await execute(actionId, selectedText, fullContext, projectId)
+      const text = await agenticExecute(actionId, selectedText, fullContext, projectId)
       onInsert(text)
     } catch (err: any) {
       setQuickActionError(err.message || 'Failed to generate')
@@ -92,6 +117,7 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
     if (!pendingPlan || !projectId || isCreating) return
     console.log('[DocCreate] Starting creation of', pendingPlan.documents.length, 'documents')
     setIsCreating(true)
+    cancelRef.current = false
     setPendingPlan(null)
 
     const docs = pendingPlan.documents
@@ -99,6 +125,11 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
     let successCount = 0
 
     for (let i = 0; i < docs.length; i++) {
+      if (cancelRef.current) {
+        setChatMessages(prev => [...prev, { role: 'assistant', content: '⏹️ Document creation cancelled by user.' }])
+        break
+      }
+
       const doc = docs[i]
       setCreatingIndex(i)
       setChatMessages(prev => [...prev, { role: 'assistant', content: `⏳ Creating **${doc.title}**...` }])
@@ -110,6 +141,15 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
         setLoading(false)
         console.log('[DocCreate] Content generated, saving document:', doc.title, 'length:', content?.length)
 
+        if (cancelRef.current) {
+          setChatMessages(prev => [...prev, { role: 'assistant', content: '⏹️ Cancelled before saving.' }])
+          break
+        }
+
+        // Show preview before saving
+        const preview = content.length > 300 ? content.slice(0, 300) + '...' : content
+        setChatMessages(prev => [...prev, { role: 'assistant', content: `**${doc.title}** — Preview:\n\n${preview}\n\n---\n_Saving..._` }])
+
         const saveRes = await api.post('/documents', {
           project_id: projectId,
           title: doc.title,
@@ -119,7 +159,7 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
         })
         console.log('[DocCreate] Document saved:', saveRes.data?.id)
         successCount++
-        setChatMessages(prev => [...prev, { role: 'assistant', content: `✅ Created **${doc.title}**` }])
+        setChatMessages(prev => [...prev, { role: 'assistant', content: `✅ Saved **${doc.title}**` }])
       } catch (err: any) {
         setLoading(false)
         const detail = err.response?.data?.detail
@@ -131,8 +171,16 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
 
     setCreatingIndex(-1)
     setIsCreating(false)
-    setChatMessages(prev => [...prev, { role: 'assistant', content: `Done! Created ${successCount}/${docs.length} document(s).` }])
+    cancelRef.current = false
+    if (!cancelRef.current) {
+      setChatMessages(prev => [...prev, { role: 'assistant', content: `Done! Created ${successCount}/${docs.length} document(s).` }])
+    }
     console.log('[DocCreate] Finished. Success:', successCount, '/', docs.length)
+  }
+
+  const handleCancelCreation = () => {
+    cancelRef.current = true
+    setChatMessages(prev => [...prev, { role: 'assistant', content: '⏹️ Cancelling after current document...' }])
   }
 
   const handleCancelPlan = () => {
@@ -171,6 +219,16 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
           AI Assistant
         </h3>
         <div className="flex items-center gap-1">
+          {reasoningLog.length > 0 && (
+            <button
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => setShowReasoning(!showReasoning)}
+              className={`p-1 rounded hover:bg-accent ${showReasoning ? 'text-primary' : 'text-muted-foreground'}`}
+              title="Toggle reasoning log"
+            >
+              <Lightbulb className="h-3.5 w-3.5" />
+            </button>
+          )}
           {chatMessages.length > 0 && (
             <button
               onClick={clearChat}
@@ -193,49 +251,77 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
       {/* Controls */}
       <div className="p-3 space-y-3 shrink-0 border-b">
         {/* Model selection */}
-        <div className="space-y-1">
+        <div className="space-y-1" ref={modelDropdownRef}>
           <div className="flex items-center justify-between">
             <label className="text-xs font-medium text-muted-foreground">Model</label>
-            {provider && (
-              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                provider === 'openrouter' ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400' :
-                provider === 'anthropic' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' :
-                provider === 'google' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' :
-                provider === 'moonshot' ? 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400' :
-                'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400'
-              }`}>
-                {provider.charAt(0).toUpperCase() + provider.slice(1)}
-              </span>
-            )}
+            <div className="flex items-center gap-1.5">
+              {provider && (
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                  provider === 'openrouter' ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400' :
+                  provider === 'anthropic' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' :
+                  provider === 'google' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' :
+                  provider === 'moonshot' ? 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400' :
+                  'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400'
+                }`}>
+                  {provider.charAt(0).toUpperCase() + provider.slice(1)}
+                </span>
+              )}
+              {currentModelCapabilities().map(cap => (
+                <CapabilityIcon key={cap} capability={cap} className="h-3 w-3 text-muted-foreground" />
+              ))}
+            </div>
           </div>
-          <select
-            value={`${provider}|${model}`}
-            onChange={(e) => {
-              const [p, m] = e.target.value.split('|')
-              setProvider(p)
-              setModel(m)
-            }}
-            className="w-full px-2 py-1.5 border rounded-md bg-background text-sm"
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setModelDropdownOpen(!modelDropdownOpen)}
+            className="w-full px-2 py-1.5 border rounded-md bg-background text-sm flex items-center justify-between hover:bg-accent/50"
           >
-            {Object.entries(
-              availableModels.reduce((acc, m) => {
-                if (!acc[m.provider]) acc[m.provider] = []
-                acc[m.provider].push(m)
-                return acc
-              }, {} as Record<string, typeof availableModels>)
-            ).map(([prov, models]) => (
-              <optgroup key={prov} label={prov.charAt(0).toUpperCase() + prov.slice(1)}>
-                {models.map((m) => (
-                  <option key={m.id} value={`${m.provider}|${m.id}`}>
-                    {m.name}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-            {availableModels.length === 0 && (
-              <option value="">No models — add API key in Settings</option>
-            )}
-          </select>
+            <span className="truncate">
+              {availableModels.find(m => m.id === model && m.provider === provider)?.name || 'Select model...'}
+            </span>
+            <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${modelDropdownOpen ? 'rotate-180' : ''}`} />
+          </button>
+          {modelDropdownOpen && (
+            <div className="border rounded-md bg-background shadow-lg max-h-60 overflow-y-auto">
+              {availableModels.length === 0 && (
+                <div className="px-3 py-2 text-sm text-muted-foreground">No models — add API key in Settings</div>
+              )}
+              {Object.entries(
+                availableModels.reduce((acc, m) => {
+                  if (!acc[m.provider]) acc[m.provider] = []
+                  acc[m.provider].push(m)
+                  return acc
+                }, {} as Record<string, typeof availableModels>)
+              ).map(([prov, models]) => (
+                <div key={prov}>
+                  <div className="px-3 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-secondary/50 sticky top-0">
+                    {prov.charAt(0).toUpperCase() + prov.slice(1)}
+                  </div>
+                  {models.map((m) => (
+                    <button
+                      key={m.id}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => {
+                        setProvider(m.provider)
+                        setModel(m.id)
+                        setModelDropdownOpen(false)
+                      }}
+                      className={`w-full px-3 py-2 text-sm flex items-center justify-between hover:bg-accent ${
+                        m.id === model && m.provider === provider ? 'bg-primary/10 text-primary' : ''
+                      }`}
+                    >
+                      <span className="truncate">{m.name}</span>
+                      <div className="flex items-center gap-1 shrink-0 ml-2">
+                        {m.capabilities?.map(cap => (
+                          <CapabilityIcon key={cap} capability={cap} className="h-3 w-3 text-muted-foreground" />
+                        ))}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Style Guide toggle */}
@@ -344,6 +430,53 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
             <div className="bg-background border rounded-lg px-3 py-2 text-sm flex items-center gap-2 text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               Writing...
+              {isCreating && (
+                <button
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={handleCancelCreation}
+                  className="ml-2 px-2 py-0.5 text-[10px] border rounded hover:bg-accent text-red-600"
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Reasoning log */}
+        {showReasoning && reasoningLog.length > 0 && (
+          <div className="flex justify-start">
+            <div className="max-w-[95%] w-full bg-secondary/30 border rounded-lg p-3 text-xs space-y-1">
+              <div className="flex items-center gap-1.5 font-medium text-muted-foreground mb-1">
+                <Brain className="h-3 w-3" />
+                Reasoning Log
+                {lastTier && (
+                  <span className="ml-auto px-1.5 py-0.5 rounded bg-secondary text-[10px] uppercase tracking-wider">
+                    {lastTier.replace('_', ' ')}
+                  </span>
+                )}
+              </div>
+              {reasoningLog.map((entry, i) => (
+                <div key={i} className="flex items-start gap-2">
+                  <span className="text-muted-foreground shrink-0 w-16">{entry.step}</span>
+                  <span className="text-foreground/80">{entry.detail}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Consulted documents */}
+        {consultedDocs.length > 0 && (
+          <div className="flex justify-start">
+            <div className="max-w-[95%] w-full text-xs text-muted-foreground">
+              <span className="font-medium">Consulted:</span>{' '}
+              {consultedDocs.map((d, i) => (
+                <span key={i}>
+                  {d.title}
+                  {i < consultedDocs.length - 1 ? ', ' : ''}
+                </span>
+              ))}
             </div>
           </div>
         )}
@@ -440,6 +573,30 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
       </div>
     </div>
   )
+}
+
+function CapabilityIcon({ capability, className }: { capability: string; className?: string }) {
+  const titles: Record<string, string> = {
+    reasoning: 'Reasoning',
+    writing: 'Writing',
+    web_search: 'Web Search',
+    vision: 'Vision',
+    coding: 'Coding',
+    long_context: 'Long Context',
+  }
+  const icon = (() => {
+    switch (capability) {
+      case 'reasoning': return <Brain className={className} />
+      case 'writing': return <Feather className={className} />
+      case 'web_search': return <Globe className={className} />
+      case 'vision': return <Eye className={className} />
+      case 'coding': return <Code className={className} />
+      case 'long_context': return <ScrollText className={className} />
+      default: return null
+    }
+  })()
+  if (!icon) return null
+  return <span title={titles[capability] || capability}>{icon}</span>
 }
 
 // Simple markdown renderer for plan text

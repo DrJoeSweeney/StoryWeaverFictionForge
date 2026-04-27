@@ -49,6 +49,8 @@ WriteForge is a writer's manuscript management app with integrated AI assistance
 - [x] Per-message Insert buttons for chat responses
 - [x] Quick action icons (Continue, Rewrite, Describe, Shorten, Expand)
 - [x] Skills system (custom prompt templates)
+- [x] **Model capability tags** — All providers expose `capabilities` (reasoning, writing, web_search, vision, coding, long_context)
+- [x] **Capability icons in model dropdown** — Custom dropdown with Lucide icons (Brain, Feather, Globe, Eye, Code, ScrollText)
 
 ### UI / UX
 - [x] Always-visible AI sidebar on all pages
@@ -129,9 +131,9 @@ data/
 
 ### High Priority
 - [ ] **Verify document creation works end-to-end** — Test with DevTools open, check console logs, confirm documents appear in manuscript tree
-- [ ] **Add duplicate title collision handling** in `file_storage.create_document()`
-- [ ] **Preview generated content in chat before saving** — Allow user to review/edit before committing to `POST /documents`
-- [ ] **Add Cancel button during document creation loop** — Abort controller or flag to stop mid-loop
+- [x] **Add duplicate title collision handling** ✅ in `file_storage.create_document()` — appends `-1`, `-2`, etc. when filename already exists
+- [x] **Preview generated content in chat before saving** ✅ — Each document shows a ~300 char preview in chat before the save attempt
+- [x] **Add Cancel button during document creation loop** ✅ — Cancel flag stops loop between documents
 
 ### Medium Priority
 - [ ] **Streaming AI responses** in chat sidebar (SSE via `/writing/stream`)
@@ -147,7 +149,24 @@ data/
 - [ ] **Collaboration** — WebSocket-based real-time editing
 - [ ] **Custom AI skills marketplace** — Share/import skill templates
 
+### In Progress: Agentic Reasoning Layer
+Tiered ReAct framework for smarter AI assistance:
+- **Phase 1: Model Capabilities** ✅ — Capability enum + provider model lists + frontend icons
+- **Phase 2: Task Classification** ✅ — Hybrid heuristic + LLM classifier, 4 tiers (QUICK_EDIT, CONTENT_GEN, RESEARCH, DEEP_WORK)
+- **Phase 3: Context Retrieval** ✅ — `ContextRetriever` fetches relevant docs by tier (style guide, outlines, characters, story bible)
+- **Phase 4: Agentic Orchestrator** ✅ — `/writing/agentic` endpoint with deep ReAct loop (plan → fetch → verify → generate)
+- **Phase 5: Frontend Integration** ✅ — Reasoning log toggle in sidebar, agentic path for all quick actions + chat
+- **Phase 6: Reasoning Model Settings** ✅ — Settings page shows capability tags, reasoning model selector saved to localStorage
+- **Phase 7: End-to-end Agentic Pipeline** ✅ — All AI paths (chat, quick actions, skills, plan, document creation) now use `/writing/agentic`
+- **Phase 8: Document Citations** ✅ — Backend tracks consulted docs; frontend shows them below assistant responses
+- **Phase 9: Research Tier** ✅ — DuckDuckGo web search integrated into RESEARCH tier; no API key required
+
 ### Technical Debt
+- [x] Add unit tests for task classifier ✅ (12 tests)
+- [x] Add unit tests for context retriever ✅ (8 tests)
+- [x] Add unit tests for web search tool ✅ (4 tests)
+- [x] Add unit tests for token budget ✅ (7 tests)
+- [x] **Token limit guardrails** ✅ — `TokenBudget` tracks usage, truncates context if it exceeds model window
 - [ ] Add unit tests for `file_storage.py` (especially `_sanitize` collision cases)
 - [ ] Add frontend tests for `useAIWriting` hook
 - [ ] Consolidate `renderMarkdown` — duplicated between sidebar components
@@ -175,4 +194,4 @@ cp -r dist/* ../backend/static/
 
 ---
 
-*Last updated: 2026-04-26*
+*Last updated: 2026-04-27*

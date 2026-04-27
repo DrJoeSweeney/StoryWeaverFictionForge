@@ -194,8 +194,17 @@ class FileStorage:
     async def create_document(self, user_id: str, data: dict) -> dict:
         project_id = data["project_id"]
         manuscript_dir = os.path.join(self._project_dir(user_id, project_id), "manuscript")
-        doc_id = self._sanitize(data.get("title", "Untitled"))
+        base_doc_id = self._sanitize(data.get("title", "Untitled"))
+        doc_id = base_doc_id
         path = os.path.join(manuscript_dir, f"{doc_id}.md")
+
+        # Handle duplicate titles by appending -1, -2, etc.
+        counter = 1
+        while os.path.exists(path):
+            doc_id = f"{base_doc_id}-{counter}"
+            path = os.path.join(manuscript_dir, f"{doc_id}.md")
+            counter += 1
+
         now = self._now()
         doc_data = {
             "title": data.get("title", "Untitled"),

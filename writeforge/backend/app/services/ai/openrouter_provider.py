@@ -1,6 +1,6 @@
 from typing import AsyncIterator
 import openai
-from app.services.ai.base import AIProvider, Message, ModelInfo
+from app.services.ai.base import AIProvider, Message, ModelInfo, ModelCapability
 
 
 class OpenRouterProvider:
@@ -41,10 +41,16 @@ class OpenRouterProvider:
     
     def list_models(self) -> list[ModelInfo]:
         return [
-            ModelInfo(id="openai/gpt-4o-mini", name="GPT-4o Mini (OR)", provider="openrouter"),
-            ModelInfo(id="openai/gpt-4o", name="GPT-4o (OR)", provider="openrouter"),
-            ModelInfo(id="anthropic/claude-3.7-sonnet", name="Claude 3.7 Sonnet (OR)", provider="openrouter"),
-            ModelInfo(id="anthropic/claude-3.5-haiku", name="Claude 3.5 Haiku (OR)", provider="openrouter"),
-            ModelInfo(id="google/gemini-2.5-flash", name="Gemini 2.5 Flash (OR)", provider="openrouter"),
-            ModelInfo(id="meta-llama/llama-3.3-70b-instruct", name="Llama 3.3 70B (OR)", provider="openrouter"),
+            ModelInfo(id="openai/gpt-4o-mini", name="GPT-4o Mini (OR)", provider="openrouter",
+                      capabilities=[ModelCapability.WRITING, ModelCapability.CODING], context_window=128000),
+            ModelInfo(id="openai/gpt-4o", name="GPT-4o (OR)", provider="openrouter",
+                      capabilities=[ModelCapability.REASONING, ModelCapability.WRITING, ModelCapability.VISION, ModelCapability.WEB_SEARCH], context_window=128000),
+            ModelInfo(id="anthropic/claude-3.7-sonnet", name="Claude 3.7 Sonnet (OR)", provider="openrouter",
+                      capabilities=[ModelCapability.REASONING, ModelCapability.WRITING, ModelCapability.LONG_CONTEXT], context_window=200000),
+            ModelInfo(id="anthropic/claude-3.5-haiku", name="Claude 3.5 Haiku (OR)", provider="openrouter",
+                      capabilities=[ModelCapability.WRITING, ModelCapability.CODING], context_window=200000),
+            ModelInfo(id="google/gemini-2.5-flash", name="Gemini 2.5 Flash (OR)", provider="openrouter",
+                      capabilities=[ModelCapability.REASONING, ModelCapability.WRITING, ModelCapability.VISION, ModelCapability.WEB_SEARCH], context_window=1000000),
+            ModelInfo(id="meta-llama/llama-3.3-70b-instruct", name="Llama 3.3 70B (OR)", provider="openrouter",
+                      capabilities=[ModelCapability.WRITING], context_window=128000),
         ]

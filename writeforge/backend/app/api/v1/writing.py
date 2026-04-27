@@ -10,6 +10,7 @@ from app.models.user import User
 from app.models.ai_provider import AIProviderConfig
 from app.services.ai.base import Message
 from app.services.ai.manager import ai_manager, decrypt_credentials
+from app.services.ai.agentic_orchestrator import AgenticOrchestrator
 from app.services.storage.base import BaseStorage
 from app.api.deps import get_storage_dep
 
@@ -23,6 +24,19 @@ class WritingRequest(BaseModel):
     temperature: float = 0.7
     project_id: str | None = None
     include_style_guide: bool = False
+
+
+class AgenticRequest(BaseModel):
+    messages: list[dict]
+    provider: str | None = None
+    model: str | None = None
+    temperature: float = 0.7
+    project_id: str | None = None
+    include_style_guide: bool = False
+    action: str | None = None  # e.g. "continue", "rewrite", "shorten"
+    prompt: str = ""  # Raw user prompt for classification
+    reasoning_provider: str | None = None
+    reasoning_model: str | None = None
 
 
 async def get_user_provider(db: AsyncSession, user: User, provider: str | None = None):
@@ -143,3 +157,61 @@ async def stream(
         yield "data: [DONE]\n\n"
     
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@router.post("/agentic")
+async def agentic(
+    req: AgenticRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    storage: BaseStorage = Depends(get_storage_dep),
+):
+    """
+    Agentic writing endpoint with tiered ReAct.
+    Classifies the task, retrieves relevant context, and generates a response.
+    """
+    writing_provider = await get_user_provider(db, current_user, req.provider)
+
+    # Use separate reasoning model if configured
+    if req.reasoning_provider:
+        reasoning_provider = await get_user_provider(db, current_user, req.reasoning_provider)
+    else:
+        reasoning_provider = writing_provider
+
+    messages = [Message(role=m["role"], content=m["content"]) for m in req.messages]
+
+    # Inject style guide if requested (legacy support)
+    if req.include_style_guide and req.project_id and storage:
+        sg_context = await build_style_guide_context(storage, req.project_id, current_user.id)
+        if sg_context:
+            if messages and messages[0].role == "system":
+                messages[0] = Message(
+                    role="system",
+                    content=messages[0].content + "\n\n---\n\nFollow this author's style guide when writing:\n\n" + sg_context
+                )
+            else:
+                messages.insert(0, Message(
+                    role="system",
+                    content="Follow this author's style guide when writing:\n\n" + sg_context
+                ))
+
+    orchestrator = AgenticOrchestrator(
+        writing_provider=writing_provider,
+        reasoning_provider=reasoning_provider,
+    )
+
+    try:
+        result = await orchestrator.run(
+            messages=messages,
+            model=req.model or "",
+            temperature=req.temperature,
+            project_id=req.project_id,
+            user_id=current_user.id,
+            storage=storage,
+            action=req.action,
+            prompt_text=req.prompt,
+            reasoning_model=req.reasoning_model or "",
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

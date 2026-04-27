@@ -1,6 +1,6 @@
 from typing import AsyncIterator
 import google.generativeai as genai
-from app.services.ai.base import AIProvider, Message, ModelInfo
+from app.services.ai.base import AIProvider, Message, ModelInfo, ModelCapability
 
 
 class GoogleProvider:
@@ -51,7 +51,10 @@ class GoogleProvider:
     
     def list_models(self) -> list[ModelInfo]:
         return [
-            ModelInfo(id="gemini-1.5-flash", name="Gemini 1.5 Flash", provider="google"),
-            ModelInfo(id="gemini-1.5-pro", name="Gemini 1.5 Pro", provider="google"),
-            ModelInfo(id="gemini-2.0-flash-exp", name="Gemini 2.0 Flash", provider="google"),
+            ModelInfo(id="gemini-1.5-flash", name="Gemini 1.5 Flash", provider="google",
+                      capabilities=[ModelCapability.WRITING, ModelCapability.VISION], context_window=1000000),
+            ModelInfo(id="gemini-1.5-pro", name="Gemini 1.5 Pro", provider="google",
+                      capabilities=[ModelCapability.REASONING, ModelCapability.WRITING, ModelCapability.VISION, ModelCapability.LONG_CONTEXT], context_window=2000000),
+            ModelInfo(id="gemini-2.0-flash-exp", name="Gemini 2.0 Flash", provider="google",
+                      capabilities=[ModelCapability.REASONING, ModelCapability.WRITING, ModelCapability.VISION], context_window=1000000),
         ]

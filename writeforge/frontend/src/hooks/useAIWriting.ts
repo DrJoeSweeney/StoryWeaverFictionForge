@@ -6,6 +6,7 @@ interface AIModel {
   id: string
   name: string
   provider: string
+  capabilities: string[]
 }
 
 interface AIConfig {
@@ -34,6 +35,24 @@ export interface DocumentPlan {
   documents: DocumentPlanItem[]
 }
 
+export interface ReasoningLogEntry {
+  step: string
+  detail: string
+}
+
+export interface ConsultedDoc {
+  type: string
+  title: string
+  id: string | null
+}
+
+export interface AgenticResponse {
+  content: string
+  reasoning_log: ReasoningLogEntry[]
+  tier: string
+  consulted_docs: ConsultedDoc[]
+}
+
 export function useAIWriting() {
   const [action, setAction] = useState('continue')
   const [customPrompt, setCustomPrompt] = useState('')
@@ -45,6 +64,9 @@ export function useAIWriting() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [pendingPlan, setPendingPlan] = useState<DocumentPlan | null>(null)
   const [creatingIndex, setCreatingIndex] = useState<number>(-1)
+  const [reasoningLog, setReasoningLog] = useState<ReasoningLogEntry[]>([])
+  const [lastTier, setLastTier] = useState<string>('')
+  const [consultedDocs, setConsultedDocs] = useState<ConsultedDoc[]>([])
 
   const { data: activeModels } = useQuery({
     queryKey: ['ai-active-models'],
@@ -255,9 +277,24 @@ If the user's request is NOT about creating documents, just answer their questio
       const cleanPrompt = promptText.replace(/^\/(plan|create)\s*/i, '')
       const userPrompt = `Request: ${cleanPrompt}\n\nCurrent project context:\n${fullContext.slice(0, 2000)}`
       const messages = buildApiMessages(systemPrompt, userPrompt)
-      const body = buildBody(messages, projectId)
-      const res = await api.post('/writing/complete', body, { timeout: 300000 })
+      const body: any = {
+        messages,
+        provider: provider || undefined,
+        model: model || undefined,
+        temperature: 0.8,
+        action: 'plan',
+        prompt: promptText,
+        ...getReasoningModelPrefs(),
+      }
+      if (projectId && includeStyleGuide) {
+        body.project_id = projectId
+        body.include_style_guide = true
+      }
+      const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
       const text = res.data.content
+      setReasoningLog(res.data.reasoning_log || [])
+      setLastTier(res.data.tier || '')
+      setConsultedDocs(res.data.consulted_docs || [])
       const plan = parsePlan(text)
       if (plan) {
         setChatMessages(prev => [
@@ -328,6 +365,74 @@ If the user's request is NOT about creating documents, just answer their questio
     }
   }, [action, model, provider, includeStyleGuide, customPrompt, chatMessages, clearChat, generatePlan])
 
+  const getReasoningModelPrefs = () => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('writeforge-reasoning-model') : ''
+    if (saved && saved.includes('|')) {
+      const [p, m] = saved.split('|')
+      return { reasoning_provider: p, reasoning_model: m }
+    }
+    return {}
+  }
+
+  const agenticGenerate = useCallback(async (selectedText: string, fullContext: string, projectId?: string) => {
+    if (!model) return
+    const promptText = customPrompt.trim()
+    const lowerPrompt = promptText.toLowerCase()
+    if (lowerPrompt === '/clear') {
+      clearChat()
+      setCustomPrompt('')
+      return
+    }
+
+    // Detect if this looks like a document creation request
+    if (detectPlanMode(promptText) || lowerPrompt.startsWith('/plan') || lowerPrompt.startsWith('/create')) {
+      await generatePlan(promptText, fullContext, projectId)
+      setCustomPrompt('')
+      return
+    }
+
+    setLoading(true)
+    setReasoningLog([])
+    setLastTier('')
+    setConsultedDocs([])
+    try {
+      const systemPrompt = getSystemPrompt(action)
+      const userPrompt = buildUserPrompt(action, selectedText || fullContext.slice(-500), fullContext, promptText)
+      const messages = buildApiMessages(systemPrompt, userPrompt)
+      const body: any = {
+        messages,
+        provider: provider || undefined,
+        model: model || undefined,
+        temperature: 0.8,
+        action: action || undefined,
+        prompt: promptText || undefined,
+        ...getReasoningModelPrefs(),
+      }
+      if (projectId && includeStyleGuide) {
+        body.project_id = projectId
+        body.include_style_guide = true
+      }
+      const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
+      const { content, reasoning_log, tier, consulted_docs } = res.data
+      setReasoningLog(reasoning_log || [])
+      setLastTier(tier || '')
+      setConsultedDocs(consulted_docs || [])
+      setChatMessages(prev => [
+        ...prev,
+        { role: 'user', content: userPrompt },
+        { role: 'assistant', content: content },
+      ])
+    } catch (err: any) {
+      setChatMessages(prev => [
+        ...prev,
+        { role: 'user', content: buildUserPrompt(action, selectedText || fullContext.slice(-500), fullContext, promptText) },
+        { role: 'assistant', content: `Error: ${err.response?.data?.detail || err.message}` },
+      ])
+    } finally {
+      setLoading(false)
+    }
+  }, [action, model, provider, includeStyleGuide, customPrompt, chatMessages, clearChat, generatePlan])
+
   const generateDocumentContent = useCallback(async (doc: DocumentPlanItem, fullContext: string, projectId?: string): Promise<string> => {
     if (!model) throw new Error('No model selected')
     console.log('[AI] Generating content for:', doc.title)
@@ -350,13 +455,16 @@ Write the full text as it would appear in the final document. Do not include met
       provider: provider || undefined,
       model: model || undefined,
       temperature: 0.8,
+      action: 'draft',
+      prompt: `Write content for "${doc.title}"`,
+      ...getReasoningModelPrefs(),
     }
     if (projectId && includeStyleGuide) {
       body.project_id = projectId
       body.include_style_guide = true
     }
     try {
-      const res = await api.post('/writing/complete', body, { timeout: 300000 })
+      const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
       console.log('[AI] Content generated, length:', res.data.content?.length)
       return res.data.content
     } catch (err: any) {
@@ -379,6 +487,37 @@ Write the full text as it would appear in the final document. Do not include met
       { role: 'assistant', content: assistantContent },
     ])
     return assistantContent
+  }, [model, provider, includeStyleGuide, chatMessages])
+
+  const agenticExecute = useCallback(async (act: string, selectedText: string, fullContext: string, projectId?: string): Promise<string> => {
+    if (!model) throw new Error('No model selected')
+    const systemPrompt = getSystemPrompt(act)
+    const userPrompt = buildUserPrompt(act, selectedText, fullContext, '')
+    const messages = buildApiMessages(systemPrompt, userPrompt)
+    const body: any = {
+      messages,
+      provider: provider || undefined,
+      model: model || undefined,
+      temperature: 0.8,
+      action: act,
+      prompt: userPrompt,
+      ...getReasoningModelPrefs(),
+    }
+    if (projectId && includeStyleGuide) {
+      body.project_id = projectId
+      body.include_style_guide = true
+    }
+    const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
+    const { content, reasoning_log, tier, consulted_docs } = res.data
+    setReasoningLog(reasoning_log || [])
+    setLastTier(tier || '')
+    setConsultedDocs(consulted_docs || [])
+    setChatMessages(prev => [
+      ...prev,
+      { role: 'user', content: `[${act}] ${selectedText || fullContext.slice(-200)}` },
+      { role: 'assistant', content: content },
+    ])
+    return content
   }, [model, provider, includeStyleGuide, chatMessages])
 
   const generateToClipboard = useCallback(async (selectedText: string, fullContext: string, projectId?: string): Promise<string> => {
@@ -421,13 +560,28 @@ Write the full text as it would appear in the final document. Do not include met
       const rendered = applyRes.data.rendered_prompt
       const systemPrompt = 'You are a creative writing assistant. ' + getLanguageInstruction()
       const messages = buildApiMessages(systemPrompt, rendered)
-      const body = buildBody(messages, projectId)
-      const res = await api.post('/writing/complete', body, { timeout: 300000 })
-      const assistantContent = res.data.content
+      const body: any = {
+        messages,
+        provider: provider || undefined,
+        model: model || undefined,
+        temperature: 0.8,
+        action: 'skill',
+        prompt: `[Skill: ${skillId}]`,
+        ...getReasoningModelPrefs(),
+      }
+      if (projectId && includeStyleGuide) {
+        body.project_id = projectId
+        body.include_style_guide = true
+      }
+      const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
+      const { content, reasoning_log, tier, consulted_docs } = res.data
+      setReasoningLog(reasoning_log || [])
+      setLastTier(tier || '')
+      setConsultedDocs(consulted_docs || [])
       setChatMessages(prev => [
         ...prev,
         { role: 'user', content: `[Skill: ${skillId}]` },
-        { role: 'assistant', content: assistantContent },
+        { role: 'assistant', content: content },
       ])
     } catch (err: any) {
       setChatMessages(prev => [
@@ -471,5 +625,10 @@ Write the full text as it would appear in the final document. Do not include met
     generateToClipboard,
     applySkill,
     execute,
+    agenticGenerate,
+    agenticExecute,
+    reasoningLog,
+    lastTier,
+    consultedDocs,
   }
 }

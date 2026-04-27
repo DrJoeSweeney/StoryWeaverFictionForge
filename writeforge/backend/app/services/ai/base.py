@@ -1,4 +1,5 @@
 from typing import Protocol, AsyncIterator
+from enum import Enum
 from pydantic import BaseModel
 
 
@@ -7,11 +8,22 @@ class Message(BaseModel):
     content: str
 
 
+class ModelCapability(str, Enum):
+    REASONING = "reasoning"
+    WRITING = "writing"
+    CODING = "coding"
+    VISION = "vision"
+    LONG_CONTEXT = "long_context"
+    WEB_SEARCH = "web_search"
+
+
 class ModelInfo(BaseModel):
     id: str
     name: str
     provider: str
-    max_tokens: int | None = None
+    capabilities: list[ModelCapability] = []
+    max_tokens: int | None = None  # Max output tokens
+    context_window: int = 4096  # Total context window size
     supports_streaming: bool = True
 
 

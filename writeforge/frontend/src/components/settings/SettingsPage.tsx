@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 import { useUISettings } from '@/hooks/useUISettings'
-import { Key, Trash2, Plus, Bot, Database, FolderOpen, Save, TestTube, CheckCircle, XCircle, Sun, Moon, Monitor, Type, Heading, Loader, List } from 'lucide-react'
+import { Key, Trash2, Plus, Bot, Database, FolderOpen, Save, TestTube, CheckCircle, XCircle, Sun, Moon, Monitor, Type, Heading, Loader, List, Brain } from 'lucide-react'
 
 interface AIConfig {
   id: string
@@ -15,6 +15,7 @@ interface AIModel {
   id: string
   name: string
   provider: string
+  capabilities: string[]
 }
 
 const PROVIDERS = [
@@ -60,11 +61,23 @@ export default function SettingsPage() {
     }
     return 'en-US'
   })
+  const [reasoningModel, setReasoningModel] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('writeforge-reasoning-model') || ''
+    }
+    return ''
+  })
   const queryClient = useQueryClient()
 
   useEffect(() => {
     localStorage.setItem('writeforge-language', language)
   }, [language])
+
+  useEffect(() => {
+    if (reasoningModel) {
+      localStorage.setItem('writeforge-reasoning-model', reasoningModel)
+    }
+  }, [reasoningModel])
 
   const { data: configs } = useQuery({
     queryKey: ['ai-configs'],
@@ -423,8 +436,21 @@ export default function SettingsPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-[500px] overflow-y-auto">
                 {activeModels.map((model) => (
                   <div key={model.id} className="p-3 bg-card rounded-lg border">
-                    <p className="font-medium text-sm">{model.name}</p>
+                    <div className="flex items-center justify-between">
+                      <p className="font-medium text-sm">{model.name}</p>
+                      <div className="flex items-center gap-1">
+                        {model.capabilities?.includes('reasoning') && <span title="Reasoning"><Brain className="h-3 w-3 text-muted-foreground" /></span>}
+                        {model.capabilities?.includes('writing') && <span title="Writing"><Type className="h-3 w-3 text-muted-foreground" /></span>}
+                      </div>
+                    </div>
                     <p className="text-xs text-muted-foreground capitalize">{model.provider}</p>
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {model.capabilities?.map((cap) => (
+                        <span key={cap} className="text-[10px] px-1.5 py-0.5 rounded-full bg-secondary text-muted-foreground">
+                          {cap.replace('_', ' ')}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -434,6 +460,37 @@ export default function SettingsPage() {
               </p>
             )}
           </div>
+        )}
+      </div>
+
+      {/* Reasoning Model */}
+      <div className="space-y-4 p-4 bg-card rounded-lg border">
+        <h2 className="text-lg font-semibold flex items-center gap-2">
+          <Brain className="h-5 w-5" />
+          Reasoning Model
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          The model used for planning, analysis, and context retrieval in deep work tasks.
+          A stronger reasoning model improves planning quality.
+        </p>
+        <select
+          value={reasoningModel}
+          onChange={(e) => setReasoningModel(e.target.value)}
+          className="w-full px-3 py-2 border rounded-md bg-background text-sm"
+        >
+          <option value="">Same as writing model (default)</option>
+          {activeModels
+            ?.filter((m) => m.capabilities?.includes('reasoning'))
+            .map((m) => (
+              <option key={m.id} value={`${m.provider}|${m.id}`}>
+                {m.name} ({m.provider})
+              </option>
+            ))}
+        </select>
+        {(!activeModels || activeModels.filter((m) => m.capabilities?.includes('reasoning')).length === 0) && (
+          <p className="text-xs text-muted-foreground">
+            No reasoning-capable models found. Add an API key for Claude, GPT-4o, or Gemini.
+          </p>
         )}
       </div>
     </div>

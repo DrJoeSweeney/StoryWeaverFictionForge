@@ -1,6 +1,6 @@
 from typing import AsyncIterator
 import openai
-from app.services.ai.base import AIProvider, Message, ModelInfo
+from app.services.ai.base import AIProvider, Message, ModelInfo, ModelCapability
 
 
 class MoonshotProvider:
@@ -65,10 +65,14 @@ class MoonshotProvider:
         if self._is_kimi_code:
             # Kimi Code API only supports the 'kimi-for-coding' model
             return [
-                ModelInfo(id="kimi-for-coding", name="Kimi for Coding", provider="moonshot"),
+                ModelInfo(id="kimi-for-coding", name="Kimi for Coding", provider="moonshot",
+                          capabilities=[ModelCapability.CODING], context_window=128000),
             ]
         return [
-            ModelInfo(id="moonshot-v1-8k", name="Kimi K1 (8K)", provider="moonshot"),
-            ModelInfo(id="moonshot-v1-32k", name="Kimi K1 (32K)", provider="moonshot"),
-            ModelInfo(id="moonshot-v1-128k", name="Kimi K1 (128K)", provider="moonshot"),
+            ModelInfo(id="moonshot-v1-8k", name="Kimi K1 (8K)", provider="moonshot",
+                      capabilities=[ModelCapability.WRITING, ModelCapability.CODING], context_window=8192),
+            ModelInfo(id="moonshot-v1-32k", name="Kimi K1 (32K)", provider="moonshot",
+                      capabilities=[ModelCapability.WRITING, ModelCapability.CODING], context_window=32768),
+            ModelInfo(id="moonshot-v1-128k", name="Kimi K1 (128K)", provider="moonshot",
+                      capabilities=[ModelCapability.WRITING, ModelCapability.CODING, ModelCapability.LONG_CONTEXT], context_window=128000),
         ]
