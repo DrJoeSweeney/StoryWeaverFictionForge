@@ -22,6 +22,7 @@ interface Skill {
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
   content: string
+  isPlan?: boolean
 }
 
 export interface DocumentPlanItem {
@@ -67,6 +68,7 @@ export function useAIWriting() {
   const [reasoningLog, setReasoningLog] = useState<ReasoningLogEntry[]>([])
   const [lastTier, setLastTier] = useState<string>('')
   const [consultedDocs, setConsultedDocs] = useState<ConsultedDoc[]>([])
+  const [isAgentic, setIsAgentic] = useState(false)
 
   const { data: activeModels } = useQuery({
     queryKey: ['ai-active-models'],
@@ -169,9 +171,11 @@ export function useAIWriting() {
       model: model || undefined,
       temperature: 0.8,
     }
-    if (projectId && includeStyleGuide) {
+    if (projectId) {
       body.project_id = projectId
-      body.include_style_guide = true
+      if (includeStyleGuide) {
+        body.include_style_guide = true
+      }
     }
     return body
   }
@@ -180,6 +184,10 @@ export function useAIWriting() {
     setChatMessages([])
     setPendingPlan(null)
     setCreatingIndex(-1)
+    setIsAgentic(false)
+    setReasoningLog([])
+    setLastTier('')
+    setConsultedDocs([])
   }, [])
 
   const detectPlanMode = (text: string): boolean => {
@@ -261,6 +269,7 @@ export function useAIWriting() {
   const generatePlan = useCallback(async (promptText: string, fullContext: string, projectId?: string): Promise<DocumentPlan | null> => {
     if (!model) return null
     setLoading(true)
+    setIsAgentic(true)
     try {
       const systemPrompt = `You are a writing assistant helping an author plan new documents. ${getLanguageInstruction()}
 
@@ -286,9 +295,11 @@ If the user's request is NOT about creating documents, just answer their questio
         prompt: promptText,
         ...getReasoningModelPrefs(),
       }
-      if (projectId && includeStyleGuide) {
+      if (projectId) {
         body.project_id = projectId
-        body.include_style_guide = true
+        if (includeStyleGuide) {
+          body.include_style_guide = true
+        }
       }
       const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
       const text = res.data.content
@@ -300,7 +311,7 @@ If the user's request is NOT about creating documents, just answer their questio
         setChatMessages(prev => [
           ...prev,
           { role: 'user', content: promptText },
-          { role: 'assistant', content: `**Plan:** ${plan.plan}\n\n` + plan.documents.map((d, i) => `${i + 1}. **${d.title}** (${d.doc_type})\n   ${d.description}`).join('\n\n') + `\n\nWould you like me to create these documents?` },
+          { role: 'assistant', content: `**Plan:** ${plan.plan}\n\n` + plan.documents.map((d, i) => `${i + 1}. **${d.title}** (${d.doc_type})\n   ${d.description}`).join('\n\n') + `\n\nWould you like me to create these documents?`, isPlan: true },
         ])
         setPendingPlan(plan)
       } else {
@@ -324,6 +335,77 @@ If the user's request is NOT about creating documents, just answer their questio
     }
   }, [model, provider, includeStyleGuide, chatMessages])
 
+  const regeneratePlan = useCallback(async (feedback: string, fullContext: string, projectId?: string) => {
+    if (!model || !pendingPlan) return null
+    setLoading(true)
+    setIsAgentic(true)
+    try {
+      const previousPlanJson = JSON.stringify({
+        plan: pendingPlan.plan,
+        documents: pendingPlan.documents,
+      })
+      const systemPrompt = `You are a writing assistant helping an author revise a document plan. ${getLanguageInstruction()}
+
+The user previously requested a document plan. Here is the current plan:
+${previousPlanJson}
+
+The user has provided feedback or suggestions. Incorporate their feedback and regenerate the plan.
+
+Respond with a JSON object in this exact format (no markdown code blocks, no extra commentary):
+{"plan":"Brief description of the plan","documents":[{"title":"Title","description":"What this document will contain","doc_type":"chapter"}]}
+
+Use appropriate doc_type values: chapter, prologue, epilogue, note, scene, part, etc.`
+
+      const userPrompt = `Feedback: ${feedback}\n\nCurrent project context:\n${fullContext.slice(0, 2000)}`
+      const messages = buildApiMessages(systemPrompt, userPrompt)
+      const body: any = {
+        messages,
+        provider: provider || undefined,
+        model: model || undefined,
+        temperature: 0.8,
+        action: 'plan',
+        prompt: feedback,
+        ...getReasoningModelPrefs(),
+      }
+      if (projectId) {
+        body.project_id = projectId
+        if (includeStyleGuide) {
+          body.include_style_guide = true
+        }
+      }
+      const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
+      const text = res.data.content
+      setReasoningLog(res.data.reasoning_log || [])
+      setLastTier(res.data.tier || '')
+      setConsultedDocs(res.data.consulted_docs || [])
+      const plan = parsePlan(text)
+      if (plan) {
+        setChatMessages(prev => [
+          ...prev,
+          { role: 'user', content: feedback },
+          { role: 'assistant', content: `**Revised Plan:** ${plan.plan}\n\n` + plan.documents.map((d, i) => `${i + 1}. **${d.title}** (${d.doc_type})\n   ${d.description}`).join('\n\n') + `\n\nWould you like me to create these documents?`, isPlan: true },
+        ])
+        setPendingPlan(plan)
+      } else {
+        setChatMessages(prev => [
+          ...prev,
+          { role: 'user', content: feedback },
+          { role: 'assistant', content: text },
+        ])
+      }
+      return plan
+    } catch (err: any) {
+      setChatMessages(prev => [
+        ...prev,
+        { role: 'user', content: feedback },
+        { role: 'assistant', content: `Error: ${err.response?.data?.detail || err.message}` },
+      ])
+      return null
+    } finally {
+      setLoading(false)
+    }
+  }, [model, provider, includeStyleGuide, chatMessages, pendingPlan])
+
   const generate = useCallback(async (selectedText: string, fullContext: string, projectId?: string) => {
     if (!model) return
     const promptText = customPrompt.trim()
@@ -342,6 +424,7 @@ If the user's request is NOT about creating documents, just answer their questio
     }
 
     setLoading(true)
+    setIsAgentic(false)
     try {
       const systemPrompt = getSystemPrompt(action)
       const userPrompt = buildUserPrompt(action, selectedText || fullContext.slice(-500), fullContext, promptText)
@@ -363,7 +446,7 @@ If the user's request is NOT about creating documents, just answer their questio
     } finally {
       setLoading(false)
     }
-  }, [action, model, provider, includeStyleGuide, customPrompt, chatMessages, clearChat, generatePlan])
+  }, [action, model, provider, includeStyleGuide, customPrompt, chatMessages, clearChat, generatePlan, regeneratePlan, pendingPlan])
 
   const getReasoningModelPrefs = () => {
     const saved = typeof window !== 'undefined' ? localStorage.getItem('fictionforge-reasoning-model') : ''
@@ -384,6 +467,13 @@ If the user's request is NOT about creating documents, just answer their questio
       return
     }
 
+    // If a plan is pending, treat input as feedback to regenerate the plan
+    if (pendingPlan) {
+      await regeneratePlan(promptText, fullContext, projectId)
+      setCustomPrompt('')
+      return
+    }
+
     // Detect if this looks like a document creation request
     if (detectPlanMode(promptText) || lowerPrompt.startsWith('/plan') || lowerPrompt.startsWith('/create')) {
       await generatePlan(promptText, fullContext, projectId)
@@ -392,6 +482,7 @@ If the user's request is NOT about creating documents, just answer their questio
     }
 
     setLoading(true)
+    setIsAgentic(true)
     setReasoningLog([])
     setLastTier('')
     setConsultedDocs([])
@@ -408,9 +499,11 @@ If the user's request is NOT about creating documents, just answer their questio
         prompt: promptText || undefined,
         ...getReasoningModelPrefs(),
       }
-      if (projectId && includeStyleGuide) {
+      if (projectId) {
         body.project_id = projectId
-        body.include_style_guide = true
+        if (includeStyleGuide) {
+          body.include_style_guide = true
+        }
       }
       const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
       const { content, reasoning_log, tier, consulted_docs } = res.data
@@ -435,6 +528,10 @@ If the user's request is NOT about creating documents, just answer their questio
 
   const generateDocumentContent = useCallback(async (doc: DocumentPlanItem, fullContext: string, projectId?: string): Promise<string> => {
     if (!model) throw new Error('No model selected')
+    setIsAgentic(true)
+    setReasoningLog([])
+    setLastTier('')
+    setConsultedDocs([])
     console.log('[AI] Generating content for:', doc.title)
     const systemPrompt = `You are a creative writing assistant. ${getLanguageInstruction()}
 
@@ -459,9 +556,11 @@ Write the full text as it would appear in the final document. Do not include met
       prompt: `Write content for "${doc.title}"`,
       ...getReasoningModelPrefs(),
     }
-    if (projectId && includeStyleGuide) {
+    if (projectId) {
       body.project_id = projectId
-      body.include_style_guide = true
+      if (includeStyleGuide) {
+        body.include_style_guide = true
+      }
     }
     try {
       const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
@@ -491,6 +590,10 @@ Write the full text as it would appear in the final document. Do not include met
 
   const agenticExecute = useCallback(async (act: string, selectedText: string, fullContext: string, projectId?: string): Promise<string> => {
     if (!model) throw new Error('No model selected')
+    setIsAgentic(true)
+    setReasoningLog([])
+    setLastTier('')
+    setConsultedDocs([])
     const systemPrompt = getSystemPrompt(act)
     const userPrompt = buildUserPrompt(act, selectedText, fullContext, '')
     const messages = buildApiMessages(systemPrompt, userPrompt)
@@ -503,9 +606,11 @@ Write the full text as it would appear in the final document. Do not include met
       prompt: userPrompt,
       ...getReasoningModelPrefs(),
     }
-    if (projectId && includeStyleGuide) {
+    if (projectId) {
       body.project_id = projectId
-      body.include_style_guide = true
+      if (includeStyleGuide) {
+        body.include_style_guide = true
+      }
     }
     const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
     const { content, reasoning_log, tier, consulted_docs } = res.data
@@ -523,6 +628,7 @@ Write the full text as it would appear in the final document. Do not include met
   const generateToClipboard = useCallback(async (selectedText: string, fullContext: string, projectId?: string): Promise<string> => {
     if (!model) return ''
     setLoading(true)
+    setIsAgentic(false)
     try {
       const systemPrompt = getSystemPrompt(action)
       const userPrompt = buildUserPrompt(action, selectedText || fullContext.slice(-500), fullContext, customPrompt)
@@ -553,6 +659,10 @@ Write the full text as it would appear in the final document. Do not include met
   const applySkill = useCallback(async (skillId: string, selectedText: string, fullContext: string, projectId?: string) => {
     if (!model) return
     setLoading(true)
+    setIsAgentic(true)
+    setReasoningLog([])
+    setLastTier('')
+    setConsultedDocs([])
     try {
       const applyRes = await api.post(`/skills/${skillId}/apply`, {
         context: { text: selectedText || fullContext, selected_text: selectedText },
@@ -569,9 +679,11 @@ Write the full text as it would appear in the final document. Do not include met
         prompt: `[Skill: ${skillId}]`,
         ...getReasoningModelPrefs(),
       }
-      if (projectId && includeStyleGuide) {
+      if (projectId) {
         body.project_id = projectId
-        body.include_style_guide = true
+        if (includeStyleGuide) {
+          body.include_style_guide = true
+        }
       }
       const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
       const { content, reasoning_log, tier, consulted_docs } = res.data
@@ -630,5 +742,6 @@ Write the full text as it would appear in the final document. Do not include met
     reasoningLog,
     lastTier,
     consultedDocs,
+    isAgentic,
   }
 }

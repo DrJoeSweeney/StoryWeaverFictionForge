@@ -11,10 +11,6 @@ class Settings(BaseSettings):
     
     database_url: str = "sqlite+aiosqlite:///./fictionforge.db"
     
-    # Storage mode: database | obsidian
-    storage_mode: str = "database"
-    obsidian_vault_path: str = "./vault"
-    
     # OAuth providers
     google_client_id: str | None = None
     google_client_secret: str | None = None

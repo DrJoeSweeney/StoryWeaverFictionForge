@@ -1,12 +1,13 @@
 import { useRef, useState, useEffect } from 'react'
 import { useAIWriting } from '@/hooks/useAIWriting'
 import api from '@/api/client'
+import AgenticStatus from './AgenticStatus'
+import SpeechMicButton from '@/components/SpeechMicButton'
 import {
   Wand2, Sparkles, RefreshCw, Type, ArrowRight,
   ChevronLeft, Loader2, Check, Zap, BookOpen,
-  MessageSquare, Trash2, FilePlus, X,
-  Brain, Feather, Globe, Eye, Code, ScrollText, ChevronDown,
-  Lightbulb
+  MessageSquare, Trash2,
+  Brain, Feather, Globe, Eye, Code, ScrollText, ChevronDown
 } from 'lucide-react'
 
 interface AIWritingSidebarProps {
@@ -14,6 +15,7 @@ interface AIWritingSidebarProps {
   getFullContext: () => string
   onInsert: (text: string) => void
   projectId?: string
+  currentDocumentId?: string
   onCollapseChange?: (collapsed: boolean) => void
 }
 
@@ -25,7 +27,7 @@ const ACTIONS = [
   { id: 'expand', label: 'Expand', icon: Sparkles, description: 'Add depth' },
 ]
 
-export default function AIWritingSidebar({ getSelectedText, getFullContext, onInsert, projectId, onCollapseChange }: AIWritingSidebarProps) {
+export default function AIWritingSidebar({ getSelectedText, getFullContext, onInsert, projectId, currentDocumentId, onCollapseChange }: AIWritingSidebarProps) {
   const [isCollapsed, setIsCollapsedInternal] = useState(false)
   const setIsCollapsed = (v: boolean) => {
     setIsCollapsedInternal(v)
@@ -52,8 +54,6 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
     agenticGenerate,
     agenticExecute,
     applySkill,
-    reasoningLog,
-    lastTier,
     consultedDocs,
   } = useAIWriting()
 
@@ -61,7 +61,6 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
   const chatContainerRef = useRef<HTMLDivElement>(null)
   const modelDropdownRef = useRef<HTMLDivElement>(null)
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false)
-  const [showReasoning, setShowReasoning] = useState(false)
 
   useEffect(() => {
     if (chatEndRef.current) {
@@ -115,6 +114,41 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
 
   const handleCreateDocuments = async () => {
     if (!pendingPlan || !projectId || isCreating) return
+
+    // If a document is open and the plan has 1 document, rewrite the current document
+    if (currentDocumentId && pendingPlan.documents.length === 1) {
+      setIsCreating(true)
+      cancelRef.current = false
+      setPendingPlan(null)
+      const doc = pendingPlan.documents[0]
+      const fullContext = getFullContext()
+
+      try {
+        setLoading(true)
+        const content = await generateDocumentContent(doc, fullContext, projectId)
+        setLoading(false)
+
+        if (cancelRef.current) {
+          setChatMessages(prev => [...prev, { role: 'assistant', content: '⏹️ Cancelled.' }])
+          setIsCreating(false)
+          return
+        }
+
+        await api.put(`/documents/${currentDocumentId}`, { content })
+        setChatMessages(prev => [...prev, { role: 'assistant', content: `✅ Updated **${doc.title}**` }])
+      } catch (err: any) {
+        setLoading(false)
+        const detail = err.response?.data?.detail
+        const errorMsg = typeof detail === 'string' ? detail : err.message || 'Unknown error'
+        setChatMessages(prev => [...prev, { role: 'assistant', content: `❌ Failed to update **${doc.title}**: ${errorMsg}` }])
+      } finally {
+        setIsCreating(false)
+        cancelRef.current = false
+      }
+      return
+    }
+
+    // Otherwise, create new documents as before
     console.log('[DocCreate] Starting creation of', pendingPlan.documents.length, 'documents')
     setIsCreating(true)
     cancelRef.current = false
@@ -219,16 +253,6 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
           AI Assistant
         </h3>
         <div className="flex items-center gap-1">
-          {reasoningLog.length > 0 && (
-            <button
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => setShowReasoning(!showReasoning)}
-              className={`p-1 rounded hover:bg-accent ${showReasoning ? 'text-primary' : 'text-muted-foreground'}`}
-              title="Toggle reasoning log"
-            >
-              <Lightbulb className="h-3.5 w-3.5" />
-            </button>
-          )}
           {chatMessages.length > 0 && (
             <button
               onClick={clearChat}
@@ -410,14 +434,36 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
                 </div>
                 {!isError && !isProgress && !msg.content.startsWith('Done!') && !msg.content.includes('cancelled') && (
                   <div className="flex gap-1 justify-end">
-                    <button
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => onInsert(msg.content)}
-                      className="flex items-center gap-1 px-2 py-1 bg-primary text-primary-foreground rounded text-xs"
-                    >
-                      <Check className="h-3 w-3" />
-                      Insert
-                    </button>
+                    {msg.isPlan && pendingPlan ? (
+                      <>
+                        <button
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={handleCreateDocuments}
+                          disabled={isCreating}
+                          className="flex items-center gap-1 px-2 py-1 bg-primary text-primary-foreground rounded text-xs disabled:opacity-50"
+                        >
+                          <Check className="h-3 w-3" />
+                          Yes
+                        </button>
+                        <button
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={handleCancelPlan}
+                          disabled={isCreating}
+                          className="flex items-center gap-1 px-2 py-1 border rounded text-xs hover:bg-accent disabled:opacity-50"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => onInsert(msg.content)}
+                        className="flex items-center gap-1 px-2 py-1 bg-primary text-primary-foreground rounded text-xs"
+                      >
+                        <Check className="h-3 w-3" />
+                        Insert
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -443,29 +489,6 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
           </div>
         )}
 
-        {/* Reasoning log */}
-        {showReasoning && reasoningLog.length > 0 && (
-          <div className="flex justify-start">
-            <div className="max-w-[95%] w-full bg-secondary/30 border rounded-lg p-3 text-xs space-y-1">
-              <div className="flex items-center gap-1.5 font-medium text-muted-foreground mb-1">
-                <Brain className="h-3 w-3" />
-                Reasoning Log
-                {lastTier && (
-                  <span className="ml-auto px-1.5 py-0.5 rounded bg-secondary text-[10px] uppercase tracking-wider">
-                    {lastTier.replace('_', ' ')}
-                  </span>
-                )}
-              </div>
-              {reasoningLog.map((entry, i) => (
-                <div key={i} className="flex items-start gap-2">
-                  <span className="text-muted-foreground shrink-0 w-16">{entry.step}</span>
-                  <span className="text-foreground/80">{entry.detail}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
         {/* Consulted documents */}
         {consultedDocs.length > 0 && (
           <div className="flex justify-start">
@@ -481,48 +504,11 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
           </div>
         )}
 
-        {/* Plan confirmation */}
-        {pendingPlan && (
-          <div className="flex justify-start">
-            <div className="max-w-[95%] w-full bg-background border rounded-lg p-3 space-y-2">
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <FilePlus className="h-4 w-4 text-primary" />
-                Document Plan
-              </div>
-              <p className="text-xs text-muted-foreground">{pendingPlan.plan}</p>
-              <div className="space-y-1">
-                {pendingPlan.documents.map((doc, i) => (
-                  <div key={i} className="text-xs px-2 py-1 bg-secondary/50 rounded">
-                    <span className="font-medium">{doc.title}</span>
-                    <span className="text-muted-foreground ml-1">({doc.doc_type})</span>
-                  </div>
-                ))}
-              </div>
-              <div className="flex gap-2 pt-1">
-                <button
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={handleCreateDocuments}
-                  disabled={isCreating}
-                  className="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 bg-primary text-primary-foreground rounded text-xs disabled:opacity-50"
-                >
-                  {isCreating ? <Loader2 className="h-3 w-3 animate-spin" /> : <FilePlus className="h-3 w-3" />}
-                  Create {pendingPlan.documents.length} document{pendingPlan.documents.length > 1 ? 's' : ''}
-                </button>
-                <button
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={handleCancelPlan}
-                  disabled={isCreating}
-                  className="px-3 py-1.5 border rounded text-xs hover:bg-accent disabled:opacity-50"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
         <div ref={chatEndRef} />
       </div>
+
+      {/* Consulted documents — only shows when agentic AI fetched project docs */}
+      <AgenticStatus consultedDocs={consultedDocs} />
 
       {/* Input area */}
       <div className="p-3 space-y-2 shrink-0 border-t">
@@ -543,6 +529,11 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
             {loading ? 'Writing...' : 'Send'}
           </button>
+          <SpeechMicButton
+            onTranscript={(text) => setCustomPrompt((prev) => prev + (prev ? ' ' : '') + text)}
+            className="px-3 py-2 border rounded-md"
+            title="Speech to text"
+          />
           <button
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => setShowSkills(!showSkills)}

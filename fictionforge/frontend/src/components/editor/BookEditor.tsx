@@ -326,6 +326,7 @@ export default function BookEditor({ projectId }: { projectId: string }) {
             getFullContext={() => selectedDoc?.content || ''}
             onInsert={handleInsertText}
             projectId={projectId}
+            currentDocumentId={selectedDoc?.id}
             onCollapseChange={setSidebarCollapsed}
           />
         </div>
