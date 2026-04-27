@@ -54,11 +54,24 @@ export interface AgenticResponse {
   consulted_docs: ConsultedDoc[]
 }
 
+const AI_MODEL_KEY = 'fictionforge-ai-model'
+const AI_PROVIDER_KEY = 'fictionforge-ai-provider'
+
+function getSavedModel(): string {
+  if (typeof window === 'undefined') return ''
+  return localStorage.getItem(AI_MODEL_KEY) || ''
+}
+
+function getSavedProvider(): string {
+  if (typeof window === 'undefined') return ''
+  return localStorage.getItem(AI_PROVIDER_KEY) || ''
+}
+
 export function useAIWriting() {
   const [action, setAction] = useState('continue')
   const [customPrompt, setCustomPrompt] = useState('')
-  const [model, setModel] = useState('')
-  const [provider, setProvider] = useState('')
+  const [model, setModel] = useState(getSavedModel)
+  const [provider, setProvider] = useState(getSavedProvider)
   const [loading, setLoading] = useState(false)
   const [showSkills, setShowSkills] = useState(false)
   const [includeStyleGuide, setIncludeStyleGuide] = useState(false)
@@ -94,9 +107,27 @@ export function useAIWriting() {
     },
   })
 
+  // Persist model/provider selection across sessions
   useEffect(() => {
-    if (activeModels && activeModels.length > 0 && !model) {
-      if (activeModels.length > 0) {
+    if (model) localStorage.setItem(AI_MODEL_KEY, model)
+    else localStorage.removeItem(AI_MODEL_KEY)
+  }, [model])
+
+  useEffect(() => {
+    if (provider) localStorage.setItem(AI_PROVIDER_KEY, provider)
+    else localStorage.removeItem(AI_PROVIDER_KEY)
+  }, [provider])
+
+  // When models load, validate saved selection or fall back to first available
+  useEffect(() => {
+    if (activeModels && activeModels.length > 0) {
+      const savedModel = getSavedModel()
+      const savedProvider = getSavedProvider()
+      const match = activeModels.find(m => m.id === savedModel && m.provider === savedProvider)
+      if (match) {
+        setModel(match.id)
+        setProvider(match.provider)
+      } else if (!model) {
         setModel(activeModels[0].id)
         setProvider(activeModels[0].provider)
       }
