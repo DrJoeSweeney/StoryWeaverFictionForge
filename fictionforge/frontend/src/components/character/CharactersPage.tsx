@@ -2,7 +2,7 @@ import { useState, useRef } from 'react'
 import type { TipTapEditorRef } from '@/components/editor/TipTapEditor'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
-import { Plus, User, Trash2, History, ChevronRight } from 'lucide-react'
+import { Plus, User, Trash2, History, ChevronRight, Loader2 } from 'lucide-react'
 import TipTapEditor from '@/components/editor/TipTapEditor'
 import AIWritingSidebar from '@/components/writing/AIWritingSidebar'
 import { useProjectTags } from '@/hooks/useProjectTags'
@@ -131,7 +131,6 @@ export default function CharactersPage({ projectId }: { projectId: string }) {
   }
 
   const handleInsertText = (text: string) => {
-    // If notes editor is focused, use it
     if (notesEditorRef.current?.isFocused()) {
       const sel = notesEditorRef.current.getSelectionInfo()
       if (sel && !sel.empty) {
@@ -144,7 +143,6 @@ export default function CharactersPage({ projectId }: { projectId: string }) {
     }
     const sel = textareaSelectionRef.current
     if (!sel) {
-      // Fallback: append if no selection captured
       if (activeField) activeField.onUpdate(activeField.value + '\n\n' + text)
       return
     }
@@ -156,211 +154,244 @@ export default function CharactersPage({ projectId }: { projectId: string }) {
     textareaSelectionRef.current = null
   }
 
-  if (isLoading) return <div className="text-center py-12">Loading characters...</div>
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 h-[calc(100vh-280px)]">
-      {/* Character list */}
-      <div className="lg:col-span-2 bg-card rounded-lg border p-4 overflow-auto space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-xl font-semibold flex items-center gap-2">
-            <User className="h-5 w-5" />
-            Characters
-          </h2>
-          <button
-            onClick={() => setShowForm(!showForm)}
-            className="flex items-center gap-1 px-2 py-1 bg-primary text-primary-foreground rounded-md text-sm"
-          >
-            <Plus className="h-4 w-4" />
-          </button>
-        </div>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <button
+          onClick={() => setShowForm(!showForm)}
+          className="flex items-center gap-2 px-3 py-2 bg-primary text-primary-foreground rounded-md text-sm"
+        >
+          <Plus className="h-4 w-4" />
+          New Character
+        </button>
+      </div>
 
-        {showForm && (
-          <form onSubmit={handleSubmit} className="p-3 bg-background rounded-lg border space-y-2">
+      {showForm && (
+        <form onSubmit={handleSubmit} className="p-4 bg-card rounded-lg border space-y-3">
+          <div className="flex gap-2">
             <input
               value={formData.name}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
               placeholder="Character name"
-              className="w-full px-2 py-1 border rounded bg-background text-sm"
+              className="flex-1 px-3 py-2 border rounded-md bg-background"
               required
             />
             <select
               value={formData.role}
               onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-              className="w-full px-2 py-1 border rounded bg-background text-sm"
+              className="px-3 py-2 border rounded-md bg-background text-sm"
             >
               {ROLES.map((r) => (
                 <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>
               ))}
             </select>
-            <div className="flex gap-2">
-              <button type="submit" className="px-3 py-1 bg-primary text-primary-foreground rounded text-xs">Add</button>
-              <button type="button" onClick={() => setShowForm(false)} className="px-3 py-1 border rounded text-xs">Cancel</button>
-            </div>
-          </form>
-        )}
-
-        <div className="space-y-2">
-          {characters?.map((char) => (
             <button
-              key={char.id}
-              onClick={() => { setSelectedChar(char); setShowHistory(false); setActiveField(null) }}
-              className={`w-full text-left p-3 rounded-lg border transition-colors ${
-                selectedChar?.id === char.id ? 'bg-accent border-primary' : 'bg-background hover:bg-accent'
-              }`}
+              type="submit"
+              disabled={createMutation.isPending}
+              className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm disabled:opacity-50"
             >
-              <div className="flex items-center gap-2">
-                <User className="h-4 w-4 text-muted-foreground" />
-                <span className="font-medium text-sm">{char.name}</span>
-                <span className="text-xs px-2 py-0.5 bg-secondary rounded-full ml-auto">{char.role}</span>
-              </div>
+              Add
             </button>
-          ))}
-        </div>
-
-        {characters?.length === 0 && (
-          <div className="text-center py-8 text-muted-foreground text-sm">
-            No characters yet. Create your first character.
           </div>
-        )}
-      </div>
+        </form>
+      )}
 
-      {/* Character detail */}
-      <div className={`${sidebarCollapsed ? 'lg:col-span-10' : 'lg:col-span-7'} bg-card rounded-lg border p-4 overflow-auto`}>
-        {selectedChar ? (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold">{selectedChar.name}</h3>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setShowHistory(!showHistory)}
-                  className={`flex items-center gap-1 px-3 py-1 rounded text-sm ${showHistory ? 'bg-primary text-primary-foreground' : 'border'}`}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 h-[calc(100vh-280px)]">
+        {/* Character list */}
+        <div className="lg:col-span-2 bg-card rounded-lg border p-4 overflow-auto">
+          <h2 className="text-sm font-semibold mb-3 text-muted-foreground uppercase tracking-wider">
+            Characters
+          </h2>
+          <div className="space-y-1">
+            {characters && characters.length > 0 ? (
+              characters.map((char) => (
+                <div
+                  key={char.id}
+                  className={`flex items-center gap-1 p-2 rounded-md cursor-pointer hover:bg-accent ${
+                    selectedChar?.id === char.id ? 'bg-accent' : ''
+                  }`}
+                  onClick={() => { setSelectedChar(char); setShowHistory(false); setActiveField(null) }}
                 >
-                  <History className="h-4 w-4" />
-                  History
-                </button>
-                <button
-                  onClick={() => deleteMutation.mutate(selectedChar.id)}
-                  className="p-1 text-muted-foreground hover:text-destructive"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-
-            {showHistory ? (
-              <div className="space-y-4">
-                <form
-                  onSubmit={(e) => { e.preventDefault(); addHistoryMutation.mutate(historyForm) }}
-                  className="p-3 bg-background rounded-lg border space-y-2"
-                >
-                  <input
-                    value={historyForm.event_title}
-                    onChange={(e) => setHistoryForm({ ...historyForm, event_title: e.target.value })}
-                    placeholder="Event title"
-                    className="w-full px-2 py-1 border rounded bg-background text-sm"
-                    required
-                  />
-                  <textarea
-                    value={historyForm.event_description}
-                    onChange={(e) => setHistoryForm({ ...historyForm, event_description: e.target.value })}
-                    placeholder="Event description..."
-                    className="w-full px-2 py-1 border rounded bg-background text-sm min-h-[60px]"
-                  />
-                  <input
-                    value={historyForm.timestamp_in_story}
-                    onChange={(e) => setHistoryForm({ ...historyForm, timestamp_in_story: e.target.value })}
-                    placeholder="Story timestamp (e.g., Chapter 3)"
-                    className="w-full px-2 py-1 border rounded bg-background text-sm"
-                  />
-                  <button type="submit" className="px-3 py-1 bg-primary text-primary-foreground rounded text-xs">
-                    Add Event
-                  </button>
-                </form>
-
-                <div className="space-y-2">
-                  {history?.map((h) => (
-                    <div key={h.id} className="p-3 bg-background rounded-lg border">
-                      <div className="flex items-center gap-2">
-                        <ChevronRight className="h-4 w-4 text-primary" />
-                        <span className="font-medium text-sm">{h.event_title}</span>
-                        {h.timestamp_in_story && (
-                          <span className="text-xs text-muted-foreground ml-auto">{h.timestamp_in_story}</span>
-                        )}
-                      </div>
-                      {h.event_description && (
-                        <p className="text-sm text-muted-foreground mt-1">{h.event_description}</p>
-                      )}
-                    </div>
-                  ))}
-                  {history?.length === 0 && (
-                    <p className="text-sm text-muted-foreground text-center py-4">No history events yet</p>
-                  )}
+                  <User className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <span className="flex-1 text-sm truncate">{char.name}</span>
+                  <span className="text-[10px] px-1.5 py-0.5 bg-secondary rounded-full text-muted-foreground shrink-0 uppercase">
+                    {char.role}
+                  </span>
                 </div>
-              </div>
+              ))
             ) : (
-              <div className="space-y-4">
-                <CharacterField label="Role" value={selectedChar.role} onChange={(v) => updateMutation.mutate({ id: selectedChar.id, data: { role: v } })} options={ROLES} />
-                <CharacterField label="Archetype" value={selectedChar.archetype || ''} onChange={(v) => updateMutation.mutate({ id: selectedChar.id, data: { archetype: v } })} />
-                <CharacterField label="Age" value={selectedChar.age || ''} onChange={(v) => updateMutation.mutate({ id: selectedChar.id, data: { age: v } })} />
-                <CharacterTextArea label="Appearance" value={selectedChar.appearance || ''} onChange={(v) => updateMutation.mutate({ id: selectedChar.id, data: { appearance: v } })} onFocus={setActiveField} onSelectionChange={(s) => { textareaSelectionRef.current = s }} />
-                <CharacterTextArea label="Personality" value={selectedChar.personality || ''} onChange={(v) => updateMutation.mutate({ id: selectedChar.id, data: { personality: v } })} onFocus={setActiveField} onSelectionChange={(s) => { textareaSelectionRef.current = s }} />
-                <CharacterTextArea label="Background" value={selectedChar.background || ''} onChange={(v) => updateMutation.mutate({ id: selectedChar.id, data: { background: v } })} onFocus={setActiveField} onSelectionChange={(s) => { textareaSelectionRef.current = s }} />
-                <CharacterTextArea label="Goals" value={selectedChar.goals || ''} onChange={(v) => updateMutation.mutate({ id: selectedChar.id, data: { goals: v } })} onFocus={setActiveField} onSelectionChange={(s) => { textareaSelectionRef.current = s }} />
-                <CharacterTextArea label="Conflicts" value={selectedChar.conflicts || ''} onChange={(v) => updateMutation.mutate({ id: selectedChar.id, data: { conflicts: v } })} onFocus={setActiveField} onSelectionChange={(s) => { textareaSelectionRef.current = s }} />
-                <CharacterTextArea label="Voice Description" value={selectedChar.voice_description || ''} onChange={(v) => updateMutation.mutate({ id: selectedChar.id, data: { voice_description: v } })} onFocus={setActiveField} onSelectionChange={(s) => { textareaSelectionRef.current = s }} />
-                <div className="space-y-1">
-                  <label className="text-xs font-medium text-muted-foreground">Notes</label>
-                  <div className="border rounded bg-background min-h-[160px] flex flex-col">
-                    <TipTapEditor
-                      ref={notesEditorRef}
-                      content={selectedChar.notes || ''}
-                      onChange={(content) => {
-                        updateMutation.mutate({ id: selectedChar.id, data: { notes: content } })
-                      }}
-                      documents={(projectDocs || []).map((d) => ({ id: d.id, title: d.title }))}
-                      tags={projectTags || []}
-                      onNavigateToDocument={(docId) => {
-                        console.log('Navigate to document:', docId)
-                      }}
-                      onTagClick={(tag) => {
-                        console.log('Tag clicked:', tag)
-                      }}
-                    />
-                  </div>
-                </div>
-              </div>
+              <p className="text-sm text-muted-foreground text-center py-4">
+                No characters yet
+              </p>
             )}
           </div>
-        ) : (
-          <div className="flex items-center justify-center h-full text-muted-foreground">
-            <div className="text-center">
-              <User className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p>Select a character to view details</p>
-            </div>
-          </div>
-        )}
-      </div>
+        </div>
 
-      {/* AI Sidebar */}
-      <div className={`${sidebarCollapsed ? 'lg:col-span-1' : 'lg:col-span-3'} overflow-hidden rounded-lg border`}>
-        <AIWritingSidebar
-          getSelectedText={() => {
-            if (notesEditorRef.current?.isFocused()) {
-              return notesEditorRef.current.getSelectionInfo()?.text || ''
-            }
-            return textareaSelectionRef.current?.value.substring(textareaSelectionRef.current.selectionStart, textareaSelectionRef.current.selectionEnd) || ''
-          }}
-          getFullContext={() => {
-            if (notesEditorRef.current?.isFocused()) {
-              return notesEditorRef.current.getContent()
-            }
-            return activeField?.value || ''
-          }}
-          onInsert={handleInsertText}
-          projectId={projectId}
-          onCollapseChange={setSidebarCollapsed}
-        />
+        {/* Character detail */}
+        <div className={`${sidebarCollapsed ? 'lg:col-span-10' : 'lg:col-span-7'} bg-card rounded-lg border flex flex-col overflow-hidden`}>
+          {selectedChar ? (
+            <div className="flex flex-col h-full">
+              {/* Header bar */}
+              <div className="flex items-center justify-between p-3 border-b">
+                <div className="flex items-center gap-2 flex-1">
+                  <span className="text-xs px-2 py-0.5 bg-secondary rounded-full uppercase tracking-wider">
+                    {selectedChar.role}
+                  </span>
+                  <input
+                    value={selectedChar.name}
+                    onChange={(e) => {
+                      const updated = { ...selectedChar, name: e.target.value }
+                      setSelectedChar(updated)
+                      updateMutation.mutate({ id: selectedChar.id, data: { name: e.target.value } })
+                    }}
+                    className="text-lg font-semibold bg-transparent border-none focus:outline-none focus:ring-0 flex-1"
+                  />
+                </div>
+                <div className="flex items-center gap-3">
+                  {updateMutation.isPending && (
+                    <span className="text-xs text-muted-foreground">Saving...</span>
+                  )}
+                  <button
+                    onClick={() => setShowHistory(!showHistory)}
+                    className={`flex items-center gap-1 px-3 py-1 rounded text-xs ${showHistory ? 'bg-primary text-primary-foreground' : 'border hover:bg-accent'}`}
+                  >
+                    <History className="h-3.5 w-3.5" />
+                    History
+                  </button>
+                  <button
+                    onClick={() => deleteMutation.mutate(selectedChar.id)}
+                    className="p-1 text-muted-foreground hover:text-destructive"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Content */}
+              <div className="flex-1 overflow-auto p-4">
+                {showHistory ? (
+                  <div className="space-y-4">
+                    <form
+                      onSubmit={(e) => { e.preventDefault(); addHistoryMutation.mutate(historyForm) }}
+                      className="p-3 bg-background rounded-lg border space-y-2"
+                    >
+                      <input
+                        value={historyForm.event_title}
+                        onChange={(e) => setHistoryForm({ ...historyForm, event_title: e.target.value })}
+                        placeholder="Event title"
+                        className="w-full px-2 py-1 border rounded bg-background text-sm"
+                        required
+                      />
+                      <textarea
+                        value={historyForm.event_description}
+                        onChange={(e) => setHistoryForm({ ...historyForm, event_description: e.target.value })}
+                        placeholder="Event description..."
+                        className="w-full px-2 py-1 border rounded bg-background text-sm min-h-[60px]"
+                      />
+                      <input
+                        value={historyForm.timestamp_in_story}
+                        onChange={(e) => setHistoryForm({ ...historyForm, timestamp_in_story: e.target.value })}
+                        placeholder="Story timestamp (e.g., Chapter 3)"
+                        className="w-full px-2 py-1 border rounded bg-background text-sm"
+                      />
+                      <button type="submit" className="px-3 py-1 bg-primary text-primary-foreground rounded text-xs">
+                        Add Event
+                      </button>
+                    </form>
+
+                    <div className="space-y-2">
+                      {history?.map((h) => (
+                        <div key={h.id} className="p-3 bg-background rounded-lg border">
+                          <div className="flex items-center gap-2">
+                            <ChevronRight className="h-4 w-4 text-primary" />
+                            <span className="font-medium text-sm">{h.event_title}</span>
+                            {h.timestamp_in_story && (
+                              <span className="text-xs text-muted-foreground ml-auto">{h.timestamp_in_story}</span>
+                            )}
+                          </div>
+                          {h.event_description && (
+                            <p className="text-sm text-muted-foreground mt-1">{h.event_description}</p>
+                          )}
+                        </div>
+                      ))}
+                      {history?.length === 0 && (
+                        <p className="text-sm text-muted-foreground text-center py-4">No history events yet</p>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <CharacterField label="Role" value={selectedChar.role} onChange={(v) => updateMutation.mutate({ id: selectedChar.id, data: { role: v } })} options={ROLES} />
+                    <CharacterField label="Archetype" value={selectedChar.archetype || ''} onChange={(v) => updateMutation.mutate({ id: selectedChar.id, data: { archetype: v } })} />
+                    <CharacterField label="Age" value={selectedChar.age || ''} onChange={(v) => updateMutation.mutate({ id: selectedChar.id, data: { age: v } })} />
+                    <CharacterTextArea label="Appearance" value={selectedChar.appearance || ''} onChange={(v) => updateMutation.mutate({ id: selectedChar.id, data: { appearance: v } })} onFocus={setActiveField} onSelectionChange={(s) => { textareaSelectionRef.current = s }} />
+                    <CharacterTextArea label="Personality" value={selectedChar.personality || ''} onChange={(v) => updateMutation.mutate({ id: selectedChar.id, data: { personality: v } })} onFocus={setActiveField} onSelectionChange={(s) => { textareaSelectionRef.current = s }} />
+                    <CharacterTextArea label="Background" value={selectedChar.background || ''} onChange={(v) => updateMutation.mutate({ id: selectedChar.id, data: { background: v } })} onFocus={setActiveField} onSelectionChange={(s) => { textareaSelectionRef.current = s }} />
+                    <CharacterTextArea label="Goals" value={selectedChar.goals || ''} onChange={(v) => updateMutation.mutate({ id: selectedChar.id, data: { goals: v } })} onFocus={setActiveField} onSelectionChange={(s) => { textareaSelectionRef.current = s }} />
+                    <CharacterTextArea label="Conflicts" value={selectedChar.conflicts || ''} onChange={(v) => updateMutation.mutate({ id: selectedChar.id, data: { conflicts: v } })} onFocus={setActiveField} onSelectionChange={(s) => { textareaSelectionRef.current = s }} />
+                    <CharacterTextArea label="Voice Description" value={selectedChar.voice_description || ''} onChange={(v) => updateMutation.mutate({ id: selectedChar.id, data: { voice_description: v } })} onFocus={setActiveField} onSelectionChange={(s) => { textareaSelectionRef.current = s }} />
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-muted-foreground">Notes</label>
+                      <div className="border rounded bg-background min-h-[160px] flex flex-col">
+                        <TipTapEditor
+                          ref={notesEditorRef}
+                          content={selectedChar.notes || ''}
+                          onChange={(content) => {
+                            updateMutation.mutate({ id: selectedChar.id, data: { notes: content } })
+                          }}
+                          documents={(projectDocs || []).map((d) => ({ id: d.id, title: d.title }))}
+                          tags={projectTags || []}
+                          onNavigateToDocument={(docId) => {
+                            console.log('Navigate to document:', docId)
+                          }}
+                          onTagClick={(tag) => {
+                            console.log('Tag clicked:', tag)
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center h-full text-muted-foreground">
+              <div className="text-center">
+                <User className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                <p>Select a character to view details</p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* AI Sidebar */}
+        <div className={`${sidebarCollapsed ? 'lg:col-span-1' : 'lg:col-span-3'} overflow-hidden rounded-lg border`}>
+          <AIWritingSidebar
+            getSelectedText={() => {
+              if (notesEditorRef.current?.isFocused()) {
+                return notesEditorRef.current.getSelectionInfo()?.text || ''
+              }
+              return textareaSelectionRef.current?.value.substring(textareaSelectionRef.current.selectionStart, textareaSelectionRef.current.selectionEnd) || ''
+            }}
+            getFullContext={() => {
+              if (notesEditorRef.current?.isFocused()) {
+                return notesEditorRef.current.getContent()
+              }
+              return activeField?.value || ''
+            }}
+            onInsert={handleInsertText}
+            projectId={projectId}
+            onCollapseChange={setSidebarCollapsed}
+          />
+        </div>
       </div>
     </div>
   )
