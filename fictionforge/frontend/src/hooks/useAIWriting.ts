@@ -8,6 +8,7 @@ interface AIModel {
   provider: string
   real_provider?: string
   cost_tier?: string
+  trains_on_data?: boolean
   capabilities: string[]
 }
 

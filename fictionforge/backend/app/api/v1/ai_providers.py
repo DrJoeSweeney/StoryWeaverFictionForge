@@ -70,6 +70,7 @@ async def list_active_models(
                         "name": m.name,
                         "provider": m.provider,
                         "cost_tier": getattr(m, "cost_tier", "mid"),
+                        "trains_on_data": False,
                         "capabilities": [c.value for c in m.capabilities],
                     }
                     for m in models

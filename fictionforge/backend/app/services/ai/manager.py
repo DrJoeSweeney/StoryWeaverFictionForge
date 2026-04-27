@@ -226,6 +226,7 @@ class AIManager:
                     "provider": "openrouter",
                     "real_provider": real_provider,
                     "cost_tier": cost_tier,
+                    "trains_on_data": True,
                     "context_length": context_length,
                     "pricing": m.get("pricing"),
                     "capabilities": [c.value for c in caps],
@@ -243,6 +244,7 @@ class AIManager:
                     "provider": "openrouter",
                     "real_provider": "OpenAI" if "openai" in mi.id else "Anthropic" if "claude" in mi.id else "Meta" if "llama" in mi.id else "Google" if "gemini" in mi.id else "OpenRouter",
                     "cost_tier": "cheap" if "mini" in mi.id or "haiku" in mi.id or "flash" in mi.id else "mid" if "gemini" in mi.id or "gpt-4o" in mi.id else "expensive" if "opus" in mi.id else "mid",
+                    "trains_on_data": True,
                     "capabilities": [c.value for c in mi.capabilities],
                 }
                 for mi in instance.list_models()

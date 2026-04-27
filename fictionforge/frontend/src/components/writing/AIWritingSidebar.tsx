@@ -8,7 +8,7 @@ import {
   ChevronLeft, Loader2, Check, Zap, BookOpen,
   MessageSquare, Trash2,
   Brain, Feather, Globe, Eye, Code, ScrollText, ChevronDown,
-  Music, Image
+  Music, Image, EyeOff
 } from 'lucide-react'
 
 interface AIWritingSidebarProps {
@@ -294,6 +294,7 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
               {currentModelCapabilities().map(cap => (
                 <CapabilityIcon key={cap} capability={cap} className="h-3 w-3 text-muted-foreground" />
               ))}
+              <TrainingIcon trainsOnData={availableModels.find(m => m.id === model && m.provider === provider)?.trains_on_data} className="text-muted-foreground" />
               <CostTierIcon tier={availableModels.find(m => m.id === model && m.provider === provider)?.cost_tier} className="text-muted-foreground" />
             </div>
           </div>
@@ -351,6 +352,7 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
                         {m.capabilities?.map(cap => (
                           <CapabilityIcon key={cap} capability={cap} className="h-3 w-3 text-muted-foreground" />
                         ))}
+                        <TrainingIcon trainsOnData={m.trains_on_data} className="text-muted-foreground" />
                         <CostTierIcon tier={m.cost_tier} className="text-muted-foreground" />
                       </div>
                     </button>
@@ -577,6 +579,11 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
       </div>
     </div>
   )
+}
+
+function TrainingIcon({ trainsOnData, className = '' }: { trainsOnData?: boolean; className?: string }) {
+  if (!trainsOnData) return null
+  return <span title="May use data for training"><EyeOff className={`h-3 w-3 ${className}`} /></span>
 }
 
 function CostTierIcon({ tier, className = '' }: { tier?: string; className?: string }) {

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 import { useUISettings } from '@/hooks/useUISettings'
-import { Key, Trash2, Plus, Bot, Database, FolderOpen, Save, TestTube, CheckCircle, XCircle, Sun, Moon, Monitor, Type, Heading, Loader, List, Brain, RefreshCw, Globe, Eye, Code, ScrollText, Feather, Music, Image } from 'lucide-react'
+import { Key, Trash2, Plus, Bot, Database, FolderOpen, Save, TestTube, CheckCircle, XCircle, Sun, Moon, Monitor, Type, Heading, Loader, List, Brain, RefreshCw, Globe, Eye, Code, ScrollText, Feather, Music, Image, EyeOff } from 'lucide-react'
 
 interface AIConfig {
   id: string
@@ -17,6 +17,7 @@ interface AIModel {
   provider: string
   real_provider?: string
   cost_tier?: string
+  trains_on_data?: boolean
   capabilities: string[]
 }
 
@@ -45,6 +46,11 @@ const LANGUAGES = [
   { code: 'hi', name: 'Hindi' },
   { code: 'ar', name: 'Arabic' },
 ]
+
+function TrainingIcon({ trainsOnData }: { trainsOnData?: boolean }) {
+  if (!trainsOnData) return null
+  return <span title="May use data for training"><EyeOff className="h-3 w-3 text-muted-foreground" /></span>
+}
 
 function CostTierIcon({ tier }: { tier?: string }) {
   if (!tier) return null
@@ -507,6 +513,7 @@ export default function SettingsPage() {
                               {model.capabilities?.includes('long_context') && <span title="Long Context"><ScrollText className="h-3 w-3 text-muted-foreground" /></span>}
                               {model.capabilities?.includes('audio') && <span title="Audio"><Music className="h-3 w-3 text-muted-foreground" /></span>}
                               {model.capabilities?.includes('image') && <span title="Image"><Image className="h-3 w-3 text-muted-foreground" /></span>}
+                              <TrainingIcon trainsOnData={model.trains_on_data} />
                               <CostTierIcon tier={model.cost_tier} />
                             </div>
                           </div>
