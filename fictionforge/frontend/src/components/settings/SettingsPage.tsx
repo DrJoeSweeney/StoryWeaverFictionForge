@@ -4,7 +4,7 @@ import api from '@/api/client'
 import { useUISettings } from '@/hooks/useUISettings'
 import { useModelPreferences } from '@/hooks/useModelPreferences'
 import {
-  Key, Trash2, Plus, Bot, TestTube, CheckCircle, XCircle, Sun, Moon, Monitor, Type, Heading, Loader, List, Brain, RefreshCw, Globe, Eye, Code, ScrollText, Feather, Music, Image, EyeOff, Star
+  Key, Trash2, Plus, Bot, TestTube, CheckCircle, XCircle, Sun, Moon, Monitor, Type, Heading, Loader, List, Brain, RefreshCw, Globe, Eye, Code, ScrollText, Feather, Music, Image, EyeOff, Star, AlertTriangle
 } from 'lucide-react'
 
 interface AIConfig {
@@ -52,7 +52,7 @@ const LANGUAGES = [
 
 function TrainingIcon({ trainsOnData }: { trainsOnData?: boolean }) {
   if (!trainsOnData) return null
-  return <span title="May use data for training"><EyeOff className="h-3 w-3 text-muted-foreground" /></span>
+  return <span title="May use data for training"><AlertTriangle className="h-3 w-3 text-amber-500" /></span>
 }
 
 function CostTierIcon({ tier }: { tier?: string }) {

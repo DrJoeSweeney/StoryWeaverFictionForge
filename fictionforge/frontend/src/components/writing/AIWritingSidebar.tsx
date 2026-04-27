@@ -9,7 +9,7 @@ import {
   ChevronLeft, Loader2, Check, Zap, BookOpen,
   MessageSquare, Trash2,
   Brain, Feather, Globe, Eye, Code, ScrollText, ChevronDown,
-  Music, Image, EyeOff, Star
+  Music, Image, Star, AlertTriangle
 } from 'lucide-react'
 
 interface AIWritingSidebarProps {
@@ -624,7 +624,7 @@ function ModelDropdownItem({ m, selected, onSelect }: { m: any; selected: boolea
 
 function TrainingIcon({ trainsOnData, className = '' }: { trainsOnData?: boolean; className?: string }) {
   if (!trainsOnData) return null
-  return <span title="May use data for training"><EyeOff className={`h-3 w-3 ${className}`} /></span>
+  return <span title="May use data for training"><AlertTriangle className={`h-3 w-3 text-amber-500 ${className}`} /></span>
 }
 
 function CostTierIcon({ tier, className = '' }: { tier?: string; className?: string }) {
