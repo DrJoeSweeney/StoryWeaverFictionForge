@@ -8,6 +8,7 @@ import { persistentSelectionKey, PersistentSelection } from './PersistentSelecti
 import { InternalLink } from './extensions/InternalLink'
 import { ContentTag } from './extensions/Tag'
 import EditorAutocomplete from './EditorAutocomplete'
+import SpeechMicButton from '@/components/SpeechMicButton'
 import {
   Bold, Italic, Heading1, Heading2, Heading3, Heading4, List, ListOrdered,
   Quote, Code, Undo, Redo, Eye, FileCode
@@ -247,6 +248,13 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
             <FormatButton onClick={() => editor.chain().focus().redo().run()} title="Redo">
               <Redo className="h-4 w-4" />
             </FormatButton>
+            <div className="w-px h-4 bg-border mx-1" />
+            <SpeechMicButton
+              onTranscript={(text) => {
+                editor.chain().focus().insertContent(text + ' ').run()
+              }}
+              title="Speech to text"
+            />
           </div>
 
           <div className="flex items-center bg-background rounded-md border p-0.5">

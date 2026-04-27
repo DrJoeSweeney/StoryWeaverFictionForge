@@ -52,9 +52,12 @@ class GoogleProvider:
     def list_models(self) -> list[ModelInfo]:
         return [
             ModelInfo(id="gemini-1.5-flash", name="Gemini 1.5 Flash", provider="google",
+                      cost_tier="cheap",
                       capabilities=[ModelCapability.WRITING, ModelCapability.VISION], context_window=1000000),
             ModelInfo(id="gemini-1.5-pro", name="Gemini 1.5 Pro", provider="google",
+                      cost_tier="mid",
                       capabilities=[ModelCapability.REASONING, ModelCapability.WRITING, ModelCapability.VISION, ModelCapability.LONG_CONTEXT], context_window=2000000),
             ModelInfo(id="gemini-2.0-flash-exp", name="Gemini 2.0 Flash", provider="google",
+                      cost_tier="cheap",
                       capabilities=[ModelCapability.REASONING, ModelCapability.WRITING, ModelCapability.VISION], context_window=1000000),
         ]

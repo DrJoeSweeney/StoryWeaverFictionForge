@@ -2,7 +2,10 @@ import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 import { useUISettings } from '@/hooks/useUISettings'
-import { Key, Trash2, Plus, Bot, Database, FolderOpen, Save, TestTube, CheckCircle, XCircle, Sun, Moon, Monitor, Type, Heading, Loader, List, Brain } from 'lucide-react'
+import { useModelPreferences } from '@/hooks/useModelPreferences'
+import {
+  Key, Trash2, Plus, Bot, TestTube, CheckCircle, XCircle, Sun, Moon, Monitor, Type, Heading, Loader, List, Brain, RefreshCw, Globe, Eye, Code, ScrollText, Feather, Music, Image, EyeOff, Star, AlertTriangle
+} from 'lucide-react'
 
 interface AIConfig {
   id: string
@@ -15,6 +18,9 @@ interface AIModel {
   id: string
   name: string
   provider: string
+  real_provider?: string
+  cost_tier?: string
+  trains_on_data?: boolean
   capabilities: string[]
 }
 
@@ -44,17 +50,57 @@ const LANGUAGES = [
   { code: 'ar', name: 'Arabic' },
 ]
 
+function TrainingIcon({ trainsOnData }: { trainsOnData?: boolean }) {
+  if (!trainsOnData) return null
+  return <span title="May use data for training"><AlertTriangle className="h-3 w-3 text-amber-500" /></span>
+}
+
+function CostTierIcon({ tier }: { tier?: string }) {
+  if (!tier) return null
+  const labels: Record<string, string> = {
+    free: 'Free',
+    cheap: 'Cheap',
+    mid: 'Mid',
+    expensive: 'Expensive',
+  }
+  const colors: Record<string, string> = {
+    free: 'text-blue-500',
+    cheap: 'text-green-500',
+    mid: 'text-yellow-500',
+    expensive: 'text-red-500',
+  }
+  const text = (() => {
+    switch (tier) {
+      case 'free': return '̶$̶'
+      case 'cheap': return '$'
+      case 'mid': return '$$'
+      case 'expensive': return '$$$'
+      default: return null
+    }
+  })()
+  if (!text) return null
+  return (
+    <span title={labels[tier] || tier} className={`text-[10px] font-bold tabular-nums ${colors[tier] || 'text-muted-foreground'}`}>
+      {text}
+    </span>
+  )
+}
+
 export default function SettingsPage() {
   const { settings, setSettings } = useUISettings()
+  const { toggleHidden, setHiddenForVendor, toggleStarred, isHidden, isStarred } = useModelPreferences()
   const [showForm, setShowForm] = useState(false)
   const [provider, setProvider] = useState('anthropic')
   const [apiKey, setApiKey] = useState('')
-  const [storageMode, setStorageMode] = useState<'database' | 'obsidian'>('database')
-  const [vaultPath, setVaultPath] = useState('')
   const [testResult, setTestResult] = useState<{provider: string; success: boolean; message: string} | null>(null)
   const [testingProvider, setTestingProvider] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [showModels, setShowModels] = useState(false)
+  const [filterTraining, setFilterTraining] = useState(false)
+  const [filterFree, setFilterFree] = useState(false)
+  const [filterCheap, setFilterCheap] = useState(false)
+  const [filterMid, setFilterMid] = useState(false)
+  const [filterExpensive, setFilterExpensive] = useState(false)
   const [language, setLanguage] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('fictionforge-language') || 'en-US'
@@ -131,6 +177,13 @@ export default function SettingsPage() {
     },
   })
 
+  const refreshModelsMutation = useMutation({
+    mutationFn: () => api.post('/ai-providers/openrouter-models/refresh'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['ai-active-models'] })
+    },
+  })
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!apiKey.trim()) return
@@ -145,62 +198,6 @@ export default function SettingsPage() {
           <Bot className="h-6 w-6" />
           Settings
         </h1>
-      </div>
-
-      <div className="space-y-4 p-4 bg-card rounded-lg border">
-        <h2 className="text-lg font-semibold flex items-center gap-2">
-          <Database className="h-5 w-5" />
-          Storage Mode
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          Choose how FictionForge stores your project data.
-        </p>
-        <div className="flex gap-2 p-1 bg-background rounded-md border">
-          <button
-            onClick={() => setStorageMode('database')}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded text-sm font-medium transition-colors ${
-              storageMode === 'database'
-                ? 'bg-primary text-primary-foreground'
-                : 'hover:bg-accent'
-            }`}
-          >
-            <Database className="h-4 w-4" />
-            Database (SQLite)
-          </button>
-          <button
-            onClick={() => setStorageMode('obsidian')}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded text-sm font-medium transition-colors ${
-              storageMode === 'obsidian'
-                ? 'bg-primary text-primary-foreground'
-                : 'hover:bg-accent'
-            }`}
-          >
-            <FolderOpen className="h-4 w-4" />
-            Obsidian Vault
-          </button>
-        </div>
-        {storageMode === 'obsidian' && (
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Vault Path</label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={vaultPath}
-                onChange={(e) => setVaultPath(e.target.value)}
-                placeholder="/path/to/your/obsidian/vault"
-                className="flex-1 px-3 py-2 border rounded-md bg-background text-sm"
-              />
-              <button className="px-3 py-2 bg-primary text-primary-foreground rounded-md text-sm flex items-center gap-1">
-                <Save className="h-4 w-4" />
-                Save
-              </button>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              In Obsidian mode, all project data is stored as Markdown files in your vault folder.
-              Characters, story bible, manuscripts, and outlines become .md files with YAML frontmatter.
-            </p>
-          </div>
-        )}
       </div>
 
       <div className="space-y-4 p-4 bg-card rounded-lg border">
@@ -378,6 +375,17 @@ export default function SettingsPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
+                  {config.provider === 'openrouter' && (
+                    <button
+                      onClick={() => refreshModelsMutation.mutate()}
+                      disabled={refreshModelsMutation.isPending}
+                      className="flex items-center gap-1 px-2 py-1 text-xs border rounded hover:bg-accent disabled:opacity-50"
+                      title="Fetch latest OpenRouter models"
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 ${refreshModelsMutation.isPending ? 'animate-spin' : ''}`} />
+                      {refreshModelsMutation.isPending ? 'Updating...' : 'Update Models'}
+                    </button>
+                  )}
                   <button
                     onClick={() => { setTestResult(null); setTestingProvider(config.provider); testMutation.mutate(config.provider) }}
                     disabled={testMutation.isPending}
@@ -415,13 +423,13 @@ export default function SettingsPage() {
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <List className="h-5 w-5" />
-            Available Models
+            Manage Models
           </h2>
           <button
             onClick={() => setShowModels(!showModels)}
             className="flex items-center gap-2 px-3 py-2 bg-primary text-primary-foreground rounded-md text-sm"
           >
-            {showModels ? 'Hide Models' : 'Show Models for My Keys'}
+            {showModels ? 'Hide Models' : 'Manage Models'}
           </button>
         </div>
 
@@ -433,27 +441,172 @@ export default function SettingsPage() {
                 <span className="text-sm">Loading available models...</span>
               </div>
             ) : activeModels && activeModels.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-[500px] overflow-y-auto">
-                {activeModels.map((model) => (
-                  <div key={model.id} className="p-3 bg-card rounded-lg border">
-                    <div className="flex items-center justify-between">
-                      <p className="font-medium text-sm">{model.name}</p>
-                      <div className="flex items-center gap-1">
-                        {model.capabilities?.includes('reasoning') && <span title="Reasoning"><Brain className="h-3 w-3 text-muted-foreground" /></span>}
-                        {model.capabilities?.includes('writing') && <span title="Writing"><Type className="h-3 w-3 text-muted-foreground" /></span>}
+              <div className="space-y-4 max-h-[500px] overflow-y-auto">
+                {/* Category filter bar */}
+                <div className="flex flex-wrap items-center gap-2 p-3 bg-secondary/30 rounded-lg border">
+                  <span className="text-xs font-medium text-muted-foreground mr-1">Hide:</span>
+                  <FilterToggle
+                    active={filterTraining}
+                    onToggle={() => setFilterTraining(v => !v)}
+                    icon={<AlertTriangle className="h-3.5 w-3.5 text-amber-500" />}
+                    label="Trains"
+                  />
+                  <FilterToggle
+                    active={filterFree}
+                    onToggle={() => setFilterFree(v => !v)}
+                    icon={<span className="text-[10px] font-bold text-blue-500">̶$̶</span>}
+                    label="Free"
+                  />
+                  <FilterToggle
+                    active={filterCheap}
+                    onToggle={() => setFilterCheap(v => !v)}
+                    icon={<span className="text-[10px] font-bold text-green-500">$</span>}
+                    label="Cheap"
+                  />
+                  <FilterToggle
+                    active={filterMid}
+                    onToggle={() => setFilterMid(v => !v)}
+                    icon={<span className="text-[10px] font-bold text-yellow-500">$$</span>}
+                    label="Mid"
+                  />
+                  <FilterToggle
+                    active={filterExpensive}
+                    onToggle={() => setFilterExpensive(v => !v)}
+                    icon={<span className="text-[10px] font-bold text-red-500">$$$</span>}
+                    label="Exp"
+                  />
+                  <div className="ml-auto flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setFilterTraining(false)
+                        setFilterFree(false)
+                        setFilterCheap(false)
+                        setFilterMid(false)
+                        setFilterExpensive(false)
+                      }}
+                      className="text-xs px-2 py-1 rounded border hover:bg-accent"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+                {(() => {
+                  const filtered = activeModels.filter(m => {
+                    if (filterTraining && m.trains_on_data) return false
+                    if (filterFree && m.cost_tier === 'free') return false
+                    if (filterCheap && m.cost_tier === 'cheap') return false
+                    if (filterMid && m.cost_tier === 'mid') return false
+                    if (filterExpensive && m.cost_tier === 'expensive') return false
+                    return true
+                  })
+                  if (filtered.length === 0) {
+                    return <p className="text-sm text-muted-foreground text-center py-4">No models match the current filters.</p>
+                  }
+                  const grouped = filtered.reduce((acc, m) => {
+                    const key = (m as any).real_provider || m.provider
+                    if (!acc[key]) acc[key] = []
+                    acc[key].push(m)
+                    return acc
+                  }, {} as Record<string, typeof activeModels>)
+                  Object.values(grouped).forEach(list => list.sort((a, b) => a.name.localeCompare(b.name)))
+                  const entries = Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b))
+                  return (
+                    <>
+                      {entries.map(([prov, models]) => {
+                  const allHidden = models.every(m => isHidden(m.id))
+                  const someHidden = models.some(m => isHidden(m.id))
+                  return (
+                    <div key={prov}>
+                      <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 sticky top-0 bg-background py-1 flex items-center gap-2">
+                        {prov}
+                        <button
+                          onClick={() => setHiddenForVendor(models.map(m => m.id), !someHidden)}
+                          className="p-0.5 rounded hover:bg-accent"
+                          title={allHidden ? 'Show all models from this vendor' : 'Hide all models from this vendor'}
+                        >
+                          {allHidden ? (
+                            <EyeOff className="h-3 w-3 text-muted-foreground" />
+                          ) : someHidden ? (
+                            <EyeOff className="h-3 w-3 text-muted-foreground/60" />
+                          ) : (
+                            <Eye className="h-3 w-3 text-muted-foreground" />
+                          )}
+                        </button>
+                      </h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        {models.map((model) => {
+                          const hidden = isHidden(model.id)
+                          const starred = isStarred(model.id)
+                          return (
+                            <div
+                              key={model.id}
+                              className={`p-3 rounded-lg border transition-opacity ${
+                                hidden
+                                  ? 'bg-card/40 border-border/40 opacity-50'
+                                  : 'bg-card border'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <p className={`font-medium text-sm ${hidden ? 'text-muted-foreground' : ''}`}>
+                                  {model.real_provider ? `${model.name} (${model.real_provider})` : model.name}
+                                </p>
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => toggleStarred(model.id)}
+                                    className="p-0.5 rounded hover:bg-accent"
+                                    title={starred ? 'Unstar model' : 'Star model (shows at top of list)'}
+                                  >
+                                    <Star
+                                      className={`h-3.5 w-3.5 ${
+                                        starred
+                                          ? 'fill-yellow-400 text-yellow-400'
+                                          : 'text-muted-foreground'
+                                      }`}
+                                    />
+                                  </button>
+                                  <button
+                                    onClick={() => toggleHidden(model.id)}
+                                    className="p-0.5 rounded hover:bg-accent"
+                                    title={hidden ? 'Show model in AI Assistant' : 'Hide model from AI Assistant'}
+                                  >
+                                    {hidden ? (
+                                      <EyeOff className="h-3.5 w-3.5 text-muted-foreground" />
+                                    ) : (
+                                      <Eye className="h-3.5 w-3.5 text-muted-foreground" />
+                                    )}
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1 mt-1">
+                                {model.capabilities?.includes('reasoning') && <span title="Reasoning"><Brain className="h-3 w-3 text-muted-foreground" /></span>}
+                                {model.capabilities?.includes('writing') && <span title="Writing"><Feather className="h-3 w-3 text-muted-foreground" /></span>}
+                                {model.capabilities?.includes('web_search') && <span title="Web Search"><Globe className="h-3 w-3 text-muted-foreground" /></span>}
+                                {model.capabilities?.includes('vision') && <span title="Vision"><Eye className="h-3 w-3 text-muted-foreground" /></span>}
+                                {model.capabilities?.includes('coding') && <span title="Coding"><Code className="h-3 w-3 text-muted-foreground" /></span>}
+                                {model.capabilities?.includes('long_context') && <span title="Long Context"><ScrollText className="h-3 w-3 text-muted-foreground" /></span>}
+                                {model.capabilities?.includes('audio') && <span title="Audio"><Music className="h-3 w-3 text-muted-foreground" /></span>}
+                                {model.capabilities?.includes('image') && <span title="Image"><Image className="h-3 w-3 text-muted-foreground" /></span>}
+                                <TrainingIcon trainsOnData={model.trains_on_data} />
+                                <CostTierIcon tier={model.cost_tier} />
+                              </div>
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {model.capabilities?.map((cap) => (
+                                  <span key={cap} className="text-[10px] px-1.5 py-0.5 rounded-full bg-secondary text-muted-foreground">
+                                    {cap.replace('_', ' ')}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )
+                        })}
                       </div>
                     </div>
-                    <p className="text-xs text-muted-foreground capitalize">{model.provider}</p>
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {model.capabilities?.map((cap) => (
-                        <span key={cap} className="text-[10px] px-1.5 py-0.5 rounded-full bg-secondary text-muted-foreground">
-                          {cap.replace('_', ' ')}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  )
+                })}
+              </>
+            )
+          })()}
+        </div>
             ) : (
               <p className="text-sm text-muted-foreground text-center py-4">
                 No active API keys configured. Add a key above to see available models.
@@ -494,5 +647,22 @@ export default function SettingsPage() {
         )}
       </div>
     </div>
+  )
+}
+
+function FilterToggle({ active, onToggle, icon, label }: { active: boolean; onToggle: () => void; icon: React.ReactNode; label: string }) {
+  return (
+    <button
+      onClick={onToggle}
+      className={`flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-md text-[10px] font-medium transition-colors border ${
+        active
+          ? 'bg-destructive/10 border-destructive/30 text-destructive'
+          : 'bg-background border-border text-muted-foreground hover:bg-accent'
+      }`}
+      title={active ? `Hiding ${label} models` : `Show ${label} models`}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
   )
 }

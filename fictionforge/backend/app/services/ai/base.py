@@ -15,6 +15,8 @@ class ModelCapability(str, Enum):
     VISION = "vision"
     LONG_CONTEXT = "long_context"
     WEB_SEARCH = "web_search"
+    AUDIO = "audio"
+    IMAGE = "image"
 
 
 class ModelInfo(BaseModel):
@@ -22,6 +24,7 @@ class ModelInfo(BaseModel):
     name: str
     provider: str
     capabilities: list[ModelCapability] = []
+    cost_tier: str = "mid"  # free | cheap | mid | expensive
     max_tokens: int | None = None  # Max output tokens
     context_window: int = 4096  # Total context window size
     supports_streaming: bool = True
