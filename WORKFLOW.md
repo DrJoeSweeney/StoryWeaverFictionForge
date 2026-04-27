@@ -1,4 +1,4 @@
-# WriteForge Git Workflow
+# FictionForge Git Workflow
 
 ## Branch Strategy
 
