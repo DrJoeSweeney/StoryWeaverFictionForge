@@ -635,6 +635,12 @@ function CostTierIcon({ tier, className = '' }: { tier?: string; className?: str
     mid: 'Mid',
     expensive: 'Expensive',
   }
+  const colors: Record<string, string> = {
+    free: 'text-blue-500',
+    cheap: 'text-green-500',
+    mid: 'text-yellow-500',
+    expensive: 'text-red-500',
+  }
   const text = (() => {
     switch (tier) {
       case 'free': return '̶$̶'
@@ -646,7 +652,7 @@ function CostTierIcon({ tier, className = '' }: { tier?: string; className?: str
   })()
   if (!text) return null
   return (
-    <span title={labels[tier] || tier} className={`text-[10px] font-bold tabular-nums ${className}`}>
+    <span title={labels[tier] || tier} className={`text-[10px] font-bold tabular-nums ${colors[tier] || 'text-muted-foreground'} ${className}`}>
       {text}
     </span>
   )
