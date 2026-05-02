@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useAIWriting } from '@/hooks/useAIWriting'
 import { useModelPreferences } from '@/hooks/useModelPreferences'
 import api from '@/api/client'
@@ -16,12 +17,16 @@ interface AIWritingSidebarProps {
   getSelectedText: () => string
   getFullContext: () => string
   onInsert: (text: string) => void
+  onAppend?: (text: string) => void
   projectId?: string
   currentDocumentId?: string
+  currentDocumentTitle?: string
+  currentDocumentType?: string
+  currentFieldName?: string
   onCollapseChange?: (collapsed: boolean) => void
 }
 
-const ACTIONS = [
+const FALLBACK_ACTIONS = [
   { id: 'continue', label: 'Continue', icon: ArrowRight, description: 'Continue from here' },
   { id: 'rewrite', label: 'Rewrite', icon: RefreshCw, description: 'Rephrase selection' },
   { id: 'describe', label: 'Describe', icon: Type, description: 'Add vivid detail' },
@@ -29,7 +34,12 @@ const ACTIONS = [
   { id: 'expand', label: 'Expand', icon: Sparkles, description: 'Add depth' },
 ]
 
-export default function AIWritingSidebar({ getSelectedText, getFullContext, onInsert, projectId, currentDocumentId, onCollapseChange }: AIWritingSidebarProps) {
+const ICON_MAP: Record<string, React.ElementType> = {
+  ArrowRight, RefreshCw, Type, Zap, Sparkles, Feather, BookOpen, ScrollText,
+  Wand2, Brain, Globe, Eye, Code, Music, Image, Star, MessageSquare,
+}
+
+export default function AIWritingSidebar({ getSelectedText, getFullContext, onInsert, onAppend, projectId, currentDocumentId, currentDocumentTitle, currentDocumentType, currentFieldName, onCollapseChange }: AIWritingSidebarProps) {
   const [isCollapsed, setIsCollapsedInternal] = useState(false)
   const setIsCollapsed = (v: boolean) => {
     setIsCollapsedInternal(v)
@@ -38,6 +48,7 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
   const [quickActionLoading, setQuickActionLoading] = useState<string | null>(null)
   const [quickActionError, setQuickActionError] = useState<string | null>(null)
   const [isCreating, setIsCreating] = useState(false)
+  const queryClient = useQueryClient()
   const cancelRef = useRef(false)
   const {
     action, setAction,
@@ -57,6 +68,10 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
     agenticExecute,
     applySkill,
     consultedDocs,
+    interactionMode,
+    generateOutlineContent,
+    writeOutlineToText,
+    executeSkill,
   } = useAIWriting()
 
   const { isHidden, isStarred } = useModelPreferences()
@@ -88,7 +103,33 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
     return m?.capabilities || []
   }
 
-  const handleGenerate = () => agenticGenerate(getSelectedText(), getFullContext(), projectId)
+  const handleGenerate = async () => {
+    const result = await agenticGenerate(getSelectedText(), getFullContext(), projectId)
+    if (typeof result === 'string' && result !== 'outline_to_text_confirmed') {
+      // Outline content was generated — insert into current doc or create new
+      if (currentDocumentId) {
+        onInsert(result)
+      } else if (projectId) {
+        // Create new document with the outline
+        try {
+          const res = await api.post('/documents', {
+            project_id: projectId,
+            title: currentDocumentTitle || 'Outline',
+            content: result,
+            parent_id: null,
+            doc_type: 'outline',
+          })
+          queryClient.invalidateQueries({ queryKey: ['documents', projectId] })
+          setChatMessages((prev) => [...prev, { role: 'assistant', content: `✅ Created new document: **${res.data.title || 'Outline'}**` }])
+        } catch (err: any) {
+          const msg = err.response?.data?.detail || err.message || 'Unknown error'
+          setChatMessages((prev) => [...prev, { role: 'assistant', content: `❌ Failed to create document: ${msg}` }])
+        }
+      }
+    } else if (result === 'outline_to_text_confirmed') {
+      await writeOutlineToText(getFullContext(), projectId, onAppend)
+    }
+  }
   const handleApplySkill = (skillId: string) => applySkill(skillId, getSelectedText(), getFullContext(), projectId)
 
   const handleQuickAction = async (actionId: string) => {
@@ -100,7 +141,14 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
     try {
       const selectedText = getSelectedText()
       const fullContext = getFullContext()
-      const text = await agenticExecute(actionId, selectedText, fullContext, projectId)
+      // Check if this is a skill ID
+      const skill = (skills || []).find((s: any) => s.id === actionId)
+      let text: string
+      if (skill && skill.is_agentic) {
+        text = await executeSkill(actionId, selectedText, fullContext, projectId, currentDocumentType, currentFieldName)
+      } else {
+        text = await agenticExecute(actionId, selectedText, fullContext, projectId, currentDocumentType, currentFieldName)
+      }
       onInsert(text)
     } catch (err: any) {
       setQuickActionError(err.message || 'Failed to generate')
@@ -119,40 +167,6 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
   const handleCreateDocuments = async () => {
     if (!pendingPlan || !projectId || isCreating) return
 
-    // If a document is open and the plan has 1 document, rewrite the current document
-    if (currentDocumentId && pendingPlan.documents.length === 1) {
-      setIsCreating(true)
-      cancelRef.current = false
-      setPendingPlan(null)
-      const doc = pendingPlan.documents[0]
-      const fullContext = getFullContext()
-
-      try {
-        setLoading(true)
-        const content = await generateDocumentContent(doc, fullContext, projectId)
-        setLoading(false)
-
-        if (cancelRef.current) {
-          setChatMessages(prev => [...prev, { role: 'assistant', content: '⏹️ Cancelled.' }])
-          setIsCreating(false)
-          return
-        }
-
-        await api.put(`/documents/${currentDocumentId}`, { content })
-        setChatMessages(prev => [...prev, { role: 'assistant', content: `✅ Updated **${doc.title}**` }])
-      } catch (err: any) {
-        setLoading(false)
-        const detail = err.response?.data?.detail
-        const errorMsg = typeof detail === 'string' ? detail : err.message || 'Unknown error'
-        setChatMessages(prev => [...prev, { role: 'assistant', content: `❌ Failed to update **${doc.title}**: ${errorMsg}` }])
-      } finally {
-        setIsCreating(false)
-        cancelRef.current = false
-      }
-      return
-    }
-
-    // Otherwise, create new documents as before
     console.log('[DocCreate] Starting creation of', pendingPlan.documents.length, 'documents')
     setIsCreating(true)
     cancelRef.current = false
@@ -196,6 +210,7 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
           doc_type: doc.doc_type || 'chapter',
         })
         console.log('[DocCreate] Document saved:', saveRes.data?.id)
+        queryClient.invalidateQueries({ queryKey: ['documents', projectId] })
         successCount++
         setChatMessages(prev => [...prev, { role: 'assistant', content: `✅ Saved **${doc.title}**` }])
       } catch (err: any) {
@@ -398,31 +413,55 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
           </div>
         )}
 
-        {/* Quick action icons */}
+        {/* Quick action icons — driven by agentic skills */}
         <div className="space-y-1">
           <label className="text-xs font-medium text-muted-foreground">Quick Actions</label>
-          <div className="flex items-center gap-1">
-            {ACTIONS.map((act) => {
-              const Icon = act.icon
-              const isActive = action === act.id
-              const isLoading = quickActionLoading === act.id
-              return (
-                <button
-                  key={act.id}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => handleQuickAction(act.id)}
-                  disabled={isLoading || !model}
-                  title={act.description}
-                  className={`flex items-center justify-center w-8 h-8 rounded-md transition-colors ${
-                    isActive
-                      ? 'bg-primary text-primary-foreground'
-                      : 'hover:bg-accent text-muted-foreground'
-                  } disabled:opacity-50`}
-                >
-                  {isLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Icon className="h-4 w-4" />}
-                </button>
-              )
-            })}
+          <div className="flex items-center gap-1 flex-wrap">
+            {(skills || []).filter((s: any) => s.is_quick_action).length > 0 ? (
+              (skills || []).filter((s: any) => s.is_quick_action).slice(0, 8).map((skill: any) => {
+                const isLoading = quickActionLoading === skill.id
+                const isActive = action === skill.action
+                const Icon = ICON_MAP[skill.icon] || Zap
+                return (
+                  <button
+                    key={skill.id}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => handleQuickAction(skill.id)}
+                    disabled={isLoading || !model}
+                    title={skill.description || skill.name}
+                    className={`flex items-center justify-center w-8 h-8 rounded-md transition-colors ${
+                      isActive
+                        ? 'bg-primary text-primary-foreground'
+                        : 'hover:bg-accent text-muted-foreground'
+                    } disabled:opacity-50`}
+                  >
+                    {isLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Icon className="h-4 w-4" />}
+                  </button>
+                )
+              })
+            ) : (
+              FALLBACK_ACTIONS.map((act) => {
+                const Icon = act.icon
+                const isActive = action === act.id
+                const isLoading = quickActionLoading === act.id
+                return (
+                  <button
+                    key={act.id}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => handleQuickAction(act.id)}
+                    disabled={isLoading || !model}
+                    title={act.description}
+                    className={`flex items-center justify-center w-8 h-8 rounded-md transition-colors ${
+                      isActive
+                        ? 'bg-primary text-primary-foreground'
+                        : 'hover:bg-accent text-muted-foreground'
+                    } disabled:opacity-50`}
+                  >
+                    {isLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Icon className="h-4 w-4" />}
+                  </button>
+                )
+              })
+            )}
           </div>
           {quickActionError && (
             <p className="text-xs text-red-600">{quickActionError}</p>
@@ -482,6 +521,74 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={handleCancelPlan}
                           disabled={isCreating}
+                          className="flex items-center gap-1 px-2 py-1 border rounded text-xs hover:bg-accent disabled:opacity-50"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : interactionMode === 'outline_creation_pending' && index === chatMessages.length - 1 && msg.role === 'assistant' ? (
+                      <>
+                        <button
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={async () => {
+                            const outlineText = await generateOutlineContent(getFullContext(), projectId)
+                            if (outlineText) {
+                              if (currentDocumentId) {
+                                onInsert(outlineText)
+                              } else if (projectId) {
+                                try {
+                                  const res = await api.post('/documents', {
+                                    project_id: projectId,
+                                    title: currentDocumentTitle || 'Outline',
+                                    content: outlineText,
+                                    parent_id: null,
+                                    doc_type: 'outline',
+                                  })
+                                  queryClient.invalidateQueries({ queryKey: ['documents', projectId] })
+                                  setChatMessages((prev) => [...prev, { role: 'assistant', content: `✅ Created new document: **${res.data.title || 'Outline'}**` }])
+                                } catch (err: any) {
+                                  const msgErr = err.response?.data?.detail || err.message || 'Unknown error'
+                                  setChatMessages((prev) => [...prev, { role: 'assistant', content: `❌ Failed to create document: ${msgErr}` }])
+                                }
+                              }
+                            }
+                          }}
+                          disabled={loading}
+                          className="flex items-center gap-1 px-2 py-1 bg-primary text-primary-foreground rounded text-xs disabled:opacity-50"
+                        >
+                          <Check className="h-3 w-3" />
+                          Yes
+                        </button>
+                        <button
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => {
+                            clearChat()
+                          }}
+                          disabled={loading}
+                          className="flex items-center gap-1 px-2 py-1 border rounded text-xs hover:bg-accent disabled:opacity-50"
+                        >
+                          Clear
+                        </button>
+                      </>
+                    ) : interactionMode === 'outline_to_text_confirm' && index === chatMessages.length - 1 && msg.role === 'assistant' ? (
+                      <>
+                        <button
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={async () => {
+                            await writeOutlineToText(getFullContext(), projectId, onAppend)
+                          }}
+                          disabled={loading}
+                          className="flex items-center gap-1 px-2 py-1 bg-primary text-primary-foreground rounded text-xs disabled:opacity-50"
+                        >
+                          <Check className="h-3 w-3" />
+                          Yes
+                        </button>
+                        <button
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => {
+                            clearChat()
+                          }}
+                          disabled={loading}
                           className="flex items-center gap-1 px-2 py-1 border rounded text-xs hover:bg-accent disabled:opacity-50"
                         >
                           Cancel

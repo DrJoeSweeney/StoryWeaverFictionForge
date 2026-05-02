@@ -12,6 +12,7 @@ class TaskTier(str, Enum):
 # Quick edit actions need no reasoning
 QUICK_EDIT_ACTIONS = {"rewrite", "shorten", "expand", "describe"}
 CONTENT_GEN_ACTIONS = {"continue", "generate"}
+DEEP_WORK_ACTIONS = {"outline_plan", "outline_generate", "outline_parse", "outline_section_write", "outline_to_text"}
 
 # Keywords that trigger research (only when explicitly requested)
 RESEARCH_KEYWORDS = {
@@ -32,17 +33,32 @@ DEEP_WORK_KEYWORDS = {
     "consistency", "check", "review", "fix", "plot hole",
 }
 
+# Factual character fields → quick edit (short, factual responses)
+CHARACTER_FACTUAL_FIELDS = {"name", "aliases", "age", "role", "archetype"}
+# Creative character fields → content generation
+CHARACTER_CREATIVE_FIELDS = {"background", "personality", "appearance", "goals", "conflicts", "voice_description", "notes"}
+
+# Document types that are inherently deep-work
+DEEP_WORK_DOC_TYPES = {"outline", "manuscript", "story", "book"}
+
 # Confidence threshold for heuristic classification
 HEURISTIC_CONFIDENCE_THRESHOLD = 0.7
 
 
-def classify_task_heuristic(prompt: str, action: str | None = None) -> tuple[TaskTier, float]:
+def classify_task_heuristic(
+    prompt: str,
+    action: str | None = None,
+    document_type: str | None = None,
+    field_name: str | None = None,
+) -> tuple[TaskTier, float]:
     """
     Fast heuristic classification. Returns (tier, confidence).
     Confidence < threshold means the heuristic is unsure — caller should use LLM fallback.
     """
     prompt_lower = prompt.lower().strip()
     words = set(re.findall(r'\b[\w\']+\b', prompt_lower))
+    doc_type = (document_type or "").lower()
+    field = (field_name or "").lower()
 
     # Action-based classification (highest confidence)
     if action:
@@ -50,6 +66,36 @@ def classify_task_heuristic(prompt: str, action: str | None = None) -> tuple[Tas
             return TaskTier.QUICK_EDIT, 1.0
         if action in CONTENT_GEN_ACTIONS:
             return TaskTier.CONTENT_GEN, 1.0
+        if action in DEEP_WORK_ACTIONS:
+            return TaskTier.DEEP_WORK, 1.0
+
+    # Document-type / field-based classification (high confidence for known patterns)
+    if doc_type == "character":
+        if field in CHARACTER_FACTUAL_FIELDS:
+            # Editing name, age, role → quick edit (factual, short)
+            return TaskTier.QUICK_EDIT, 0.85
+        if field in CHARACTER_CREATIVE_FIELDS:
+            # Background, personality, goals → content gen (creative, needs context)
+            return TaskTier.CONTENT_GEN, 0.75
+
+    if doc_type == "style_guide":
+        # Style guide entries are usually concise rules
+        if field == "content":
+            return TaskTier.QUICK_EDIT, 0.8
+
+    if doc_type == "story_bible":
+        # World-building entries need creative context
+        if field == "content":
+            return TaskTier.CONTENT_GEN, 0.7
+
+    if doc_type == "outline":
+        if field == "beat_description":
+            return TaskTier.CONTENT_GEN, 0.75
+        if field == "outline_content":
+            return TaskTier.DEEP_WORK, 0.8
+
+    if doc_type in ("note",):
+        return TaskTier.CONTENT_GEN, 0.65
 
     # Very short prompts with edit keywords → quick edit
     if len(words) < 15:
@@ -98,7 +144,7 @@ def classify_task_heuristic(prompt: str, action: str | None = None) -> tuple[Tas
     return TaskTier.CONTENT_GEN, 0.5
 
 
-CLASSIFIER_SYSTEM_PROMPT = """You are a task classifier for a novel-writing AI assistant.
+_DEFAULT_CLASSIFIER_PROMPT = """You are a task classifier for a novel-writing AI assistant.
 
 Given a user's request, classify it into one of these tiers:
 - QUICK_EDIT: Simple text edits (rewrite, shorten, expand, find synonym). No reasoning needed.
@@ -106,17 +152,32 @@ Given a user's request, classify it into one of these tiers:
 - RESEARCH: Research real-world facts (history, culture, names, etymology). Needs web search.
 - DEEP_WORK: Complex creative tasks (draft chapter, create character, plan story, consistency check). Needs deep multi-step reasoning.
 
+Current context:
+- Document type: {{document_type}}
+- Field being edited: {{field_name}}
+
 Rules:
 - RESEARCH only if the user is asking about REAL-WORLD facts, history, culture, or authenticity.
 - "Continue my story" = CONTENT_GEN, not RESEARCH.
 - "Research Victorian London" = RESEARCH.
 - "Create a new villain" = DEEP_WORK.
 - "Rewrite this paragraph" = QUICK_EDIT.
+- When editing a character's factual field (name, age, role) → QUICK_EDIT.
+- When editing a character's creative field (background, personality, goals) → CONTENT_GEN.
+- When editing a story bible entry → CONTENT_GEN (needs world consistency).
+- When editing a style guide entry → QUICK_EDIT (concise rules).
+- When editing an outline beat → CONTENT_GEN.
 
 Respond with JSON only: {"tier": "QUICK_EDIT|CONTENT_GEN|RESEARCH|DEEP_WORK", "confidence": 0.0-1.0}"""
 
 
-async def classify_task_llm(prompt: str, provider) -> tuple[TaskTier, float]:
+async def classify_task_llm(
+    prompt: str,
+    provider,
+    classifier_prompt: str | None = None,
+    document_type: str | None = None,
+    field_name: str | None = None,
+) -> tuple[TaskTier, float]:
     """
     LLM-based classification fallback for ambiguous prompts.
     Uses a lightweight call to the reasoning model.
@@ -124,8 +185,14 @@ async def classify_task_llm(prompt: str, provider) -> tuple[TaskTier, float]:
     from app.services.ai.base import Message
     import json
 
+    doc_type = document_type or "unknown"
+    field = field_name or "unknown"
+
+    tmpl = classifier_prompt or _DEFAULT_CLASSIFIER_PROMPT
+    system_prompt = tmpl.replace("{{document_type}}", doc_type).replace("{{field_name}}", field)
+
     messages = [
-        Message(role="system", content=CLASSIFIER_SYSTEM_PROMPT),
+        Message(role="system", content=system_prompt),
         Message(role="user", content=f'Classify this request: "{prompt}"'),
     ]
 
@@ -151,18 +218,30 @@ async def classify_task_llm(prompt: str, provider) -> tuple[TaskTier, float]:
     return TaskTier.CONTENT_GEN, 0.5
 
 
-async def classify_task(prompt: str, action: str | None = None, provider=None) -> TaskTier:
+async def classify_task(
+    prompt: str,
+    action: str | None = None,
+    provider=None,
+    classifier_prompt: str | None = None,
+    document_type: str | None = None,
+    field_name: str | None = None,
+) -> TaskTier:
     """
     Hybrid classifier: heuristic first, LLM fallback if uncertain.
     """
-    tier, confidence = classify_task_heuristic(prompt, action)
+    tier, confidence = classify_task_heuristic(prompt, action, document_type, field_name)
 
     if confidence >= HEURISTIC_CONFIDENCE_THRESHOLD:
         return tier
 
     # Heuristic is unsure — use LLM if available
     if provider:
-        tier, _ = await classify_task_llm(prompt, provider)
+        tier, _ = await classify_task_llm(
+            prompt, provider,
+            classifier_prompt=classifier_prompt,
+            document_type=document_type,
+            field_name=field_name,
+        )
         return tier
 
     # No LLM available, go with heuristic best guess

@@ -275,6 +275,8 @@ export default function DocumentEditor({ projectId }: { projectId: string }) {
             onInsert={handleInsertText}
             projectId={projectId}
             currentDocumentId={selectedDoc?.id}
+            currentDocumentType={selectedDoc?.doc_type}
+            currentFieldName="content"
             onCollapseChange={setSidebarCollapsed}
           />
         </div>

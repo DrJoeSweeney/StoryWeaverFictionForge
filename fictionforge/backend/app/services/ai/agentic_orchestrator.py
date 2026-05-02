@@ -7,45 +7,6 @@ from app.services.ai.token_budget import TokenBudget, estimate_message_tokens
 from app.services.storage.base import BaseStorage
 
 
-REASONING_PLANNER_PROMPT = """You are a planning agent for a novel-writing assistant.
-
-The user has made this request:
-"{user_prompt}"
-
-Current document context:
-{doc_context}
-
-Available project content types:
-- style_guide: Author's writing rules and voice preferences
-- outlines: Story structure, acts, chapters, beats
-- characters: Character profiles, notes, arcs
-- story_bible: World-building entries, lore, rules
-- documents: Previous chapters/scenes for continuity
-
-Your task: Determine which content is NEEDED to fulfill this request well.
-Return JSON only:
-{"needs": ["style_guide", "outline_current_act", "character_NAME", "story_bible", "previous_chapter", ...]}
-
-Rules:
-- Only include content directly relevant to the request
-- Use "character_<name>" for specific characters mentioned
-- Use "previous_chapter" for continuity when drafting new chapters
-- Be concise. Include at most 5 items."""
-
-
-REASONING_VERIFIER_PROMPT = """You are verifying that sufficient context has been gathered for a writing task.
-
-User request: "{user_prompt}"
-
-Retrieved content summary:
-{context_summary}
-
-Are we ready to generate a high-quality response? Return JSON only:
-{"ready": true/false, "missing": ["what else is needed"], "notes": "any constraints or emphasis for the writer"}
-
-If ready=true, the "missing" array should be empty."""
-
-
 class AgenticOrchestrator:
     def __init__(self, writing_provider, reasoning_provider=None, reasoning_model: str = ""):
         self.writing_provider = writing_provider
@@ -55,6 +16,18 @@ class AgenticOrchestrator:
 
     def log(self, step: str, detail: str):
         self.reasoning_log.append({"step": step, "detail": detail})
+
+    async def _load_skill_prompt(self, storage: BaseStorage | None, user_id: str, skill_id: str, default: str) -> str:
+        """Load a system prompt from the skills library, falling back to default if not found."""
+        if not storage:
+            return default
+        try:
+            skill = await storage.get_skill(skill_id, user_id)
+            if skill and skill.get("system_prompt"):
+                return skill["system_prompt"]
+        except Exception:
+            pass
+        return default
 
     async def run(
         self,
@@ -67,6 +40,8 @@ class AgenticOrchestrator:
         action: str | None = None,
         prompt_text: str = "",
         reasoning_model: str = "",
+        document_type: str | None = None,
+        field_name: str | None = None,
     ) -> dict:
         """
         Main agentic orchestration entry point.
@@ -89,8 +64,40 @@ class AgenticOrchestrator:
         elif "gpt-4o-mini" in model.lower():
             context_window = 128000
 
-        # 1. Classify task
-        tier = await classify_task(prompt_text, action, provider=self.reasoning_provider)
+        # Load prompts from skills library (with hardcoded fallbacks)
+        classifier_prompt = await self._load_skill_prompt(
+            storage, user_id, "Task_Classifier",
+            """You are a task classifier for a novel-writing AI assistant.
+
+Given a user's request, classify it into one of these tiers:
+- QUICK_EDIT: Simple text edits (rewrite, shorten, expand, find synonym). No reasoning needed.
+- CONTENT_GEN: Continue story, generate prose, apply writing skill. Needs style guide + outline.
+- RESEARCH: Research real-world facts (history, culture, names, etymology). Needs web search.
+- DEEP_WORK: Complex creative tasks (draft chapter, create character, plan story, consistency check). Needs deep multi-step reasoning.
+
+Rules:
+- RESEARCH only if the user is asking about REAL-WORLD facts, history, culture, or authenticity.
+- "Continue my story" = CONTENT_GEN, not RESEARCH.
+- "Research Victorian London" = RESEARCH.
+- "Create a new villain" = DEEP_WORK.
+- "Rewrite this paragraph" = QUICK_EDIT.
+
+Respond with JSON only: {"tier": "QUICK_EDIT|CONTENT_GEN|RESEARCH|DEEP_WORK", "confidence": 0.0-1.0}"""
+        )
+
+        fallback_system_prompt = await self._load_skill_prompt(
+            storage, user_id, "Fallback_System",
+            "You are a creative writing assistant."
+        )
+
+        # 1. Classify task (passing the loaded classifier prompt + document context)
+        tier = await classify_task(
+            prompt_text, action,
+            provider=self.reasoning_provider,
+            classifier_prompt=classifier_prompt,
+            document_type=document_type,
+            field_name=field_name,
+        )
         self.log("classify", f"Classified as: {tier.value}")
 
         # 2. QUICK_EDIT — bypass reasoning entirely
@@ -132,6 +139,8 @@ class AgenticOrchestrator:
                 user_id=user_id,
                 task_tier=tier,
                 prompt=prompt_text,
+                document_type=document_type,
+                field_name=field_name,
             )
             extra_context = context.to_prompt_text(max_tokens=4000)
             self.log("retrieve", f"Retrieved {len(context.style_guide)} style entries, {len(context.outlines)} outlines")
@@ -143,6 +152,8 @@ class AgenticOrchestrator:
                 user_id=user_id,
                 task_tier=tier,
                 prompt=prompt_text,
+                document_type=document_type,
+                field_name=field_name,
             )
             project_context = context.to_prompt_text(max_tokens=2000)
 
@@ -158,6 +169,35 @@ class AgenticOrchestrator:
             # Deep ReAct loop
             self.log("plan", "Planning context needs...")
 
+            # Load planner prompt from skills
+            planner_prompt_template = await self._load_skill_prompt(
+                storage, user_id, "Reasoning_Planner",
+                """You are a planning agent for a novel-writing assistant.
+
+The user has made this request:
+"{user_prompt}"
+
+Current document context:
+{doc_context}
+
+Available project content types:
+- style_guide: Author's writing rules and voice preferences
+- outlines: Story structure, acts, chapters, beats
+- characters: Character profiles, notes, arcs
+- story_bible: World-building entries, lore, rules
+- documents: Previous chapters/scenes for continuity
+
+Your task: Determine which content is NEEDED to fulfill this request well.
+Return JSON only:
+{{"needs": ["style_guide", "outline_current_act", "character_NAME", "story_bible", "previous_chapter", ...]}}
+
+Rules:
+- Only include content directly relevant to the request
+- Use "character_<name>" for specific characters mentioned
+- Use "previous_chapter" for continuity when drafting new chapters
+- Be concise. Include at most 5 items."""
+            )
+
             # Step 1: Plan what to fetch
             doc_context = "No specific document context"
             if messages and len(messages) > 1:
@@ -166,7 +206,7 @@ class AgenticOrchestrator:
                 if sys_msg:
                     doc_context = sys_msg.content[:500]
 
-            plan_prompt = REASONING_PLANNER_PROMPT.format(
+            plan_prompt = planner_prompt_template.format(
                 user_prompt=prompt_text,
                 doc_context=doc_context,
             )
@@ -194,12 +234,33 @@ class AgenticOrchestrator:
 
             # Step 2: Fetch
             self.log("fetch", f"Fetching: {', '.join(needs) if needs else 'default context'}")
-            context = await retriever.fetch_by_plan(project_id, user_id, needs)
+            context = await retriever.fetch_by_plan(
+                project_id, user_id, needs,
+                document_type=document_type,
+                field_name=field_name,
+            )
 
             # Step 3: Verify readiness
             self.log("verify", "Verifying context sufficiency...")
+
+            # Load verifier prompt from skills
+            verifier_prompt_template = await self._load_skill_prompt(
+                storage, user_id, "Reasoning_Verifier",
+                """You are verifying that sufficient context has been gathered for a writing task.
+
+User request: "{user_prompt}"
+
+Retrieved content summary:
+{context_summary}
+
+Are we ready to generate a high-quality response? Return JSON only:
+{{"ready": true/false, "missing": ["what else is needed"], "notes": "any constraints or emphasis for the writer"}}
+
+If ready=true, the "missing" array should be empty."""
+            )
+
             context_summary = context.to_prompt_text(max_tokens=2000)
-            verify_prompt = REASONING_VERIFIER_PROMPT.format(
+            verify_prompt = verifier_prompt_template.format(
                 user_prompt=prompt_text,
                 context_summary=context_summary[:1500],
             )
@@ -265,7 +326,7 @@ class AgenticOrchestrator:
             else:
                 modified_messages.insert(0, Message(
                     role="system",
-                    content="You are a creative writing assistant." + context_injection,
+                    content=fallback_system_prompt + context_injection,
                 ))
         else:
             modified_messages = messages

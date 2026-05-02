@@ -71,11 +71,21 @@ class ContextRetriever:
         task_tier: TaskTier,
         prompt: str = "",
         current_doc_id: str | None = None,
+        document_type: str | None = None,
+        field_name: str | None = None,
     ) -> RetrievalResult:
         """
-        Fetch relevant project context based on task tier.
+        Fetch relevant project context based on task tier and document type.
+        document_type awareness improves relevance:
+        - character → fetch other characters, story bible
+        - story_bible → fetch characters, documents
+        - outline → fetch all documents, characters
+        - style_guide → fetch recent chapters
+        - chapter/scene → fetch outline, previous chapters, characters
+        - note → fetch related documents, story bible
         """
         result = RetrievalResult()
+        doc_type = (document_type or "").lower()
 
         if task_tier == TaskTier.QUICK_EDIT:
             # No extra context needed
@@ -87,11 +97,28 @@ class ContextRetriever:
         if task_tier == TaskTier.CONTENT_GEN:
             # Content generation needs outline for continuity
             result.outlines = await self.storage.list_outlines(project_id, user_id)
+
+            # Document-type aware additions
+            if doc_type == "character":
+                # When editing a character, seeing other characters helps consistency
+                result.characters = await self.storage.list_characters(project_id, user_id)
+                result.story_bible = await self.storage.list_story_bible(project_id, user_id)
+            elif doc_type == "story_bible":
+                # World-building benefits from character context
+                result.characters = await self.storage.list_characters(project_id, user_id)
+                result.story_bible = await self.storage.list_story_bible(project_id, user_id)
+            elif doc_type == "note":
+                # Notes may reference documents
+                docs = await self.storage.list_documents(project_id, user_id)
+                result.documents = docs[-3:] if docs else []
+
             return result
 
         if task_tier == TaskTier.RESEARCH:
             # Research gets style guide + story bible (to avoid contradicting world rules)
             result.story_bible = await self.storage.list_story_bible(project_id, user_id)
+            if doc_type == "character":
+                result.characters = await self.storage.list_characters(project_id, user_id)
             return result
 
         if task_tier == TaskTier.DEEP_WORK:
@@ -132,12 +159,15 @@ class ContextRetriever:
         project_id: str,
         user_id: str,
         needs: list[str],
+        document_type: str | None = None,
+        field_name: str | None = None,
     ) -> RetrievalResult:
         """
         Fetch specific documents based on a reasoning plan.
         Used by the deep ReAct loop after the reasoning model decides what's needed.
         """
         result = RetrievalResult()
+        doc_type = (document_type or "").lower()
 
         for need in needs:
             need_lower = need.lower()

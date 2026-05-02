@@ -389,6 +389,8 @@ export default function CharactersPage({ projectId }: { projectId: string }) {
             }}
             onInsert={handleInsertText}
             projectId={projectId}
+            currentDocumentType="character"
+            currentFieldName={notesEditorRef.current?.isFocused() ? 'notes' : activeField?.label?.toLowerCase().replace(/\s+/g, '_') || 'character'}
             onCollapseChange={setSidebarCollapsed}
           />
         </div>

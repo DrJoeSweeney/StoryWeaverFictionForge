@@ -139,6 +139,12 @@ export default function BookEditor({ projectId }: { projectId: string }) {
     // debounced auto-save handles persistence.
   }
 
+  const handleAppendText = (text: string) => {
+    if (!selectedDoc || !editorRef.current) return
+    editorRef.current.appendToEnd(text)
+    editorRef.current.focus()
+  }
+
   // Drag and drop handlers
   const handleDragStart = (index: number) => {
     dragIndexRef.current = index
@@ -237,7 +243,7 @@ export default function BookEditor({ projectId }: { projectId: string }) {
                     onDragLeave={handleDragLeave}
                     onDrop={(e) => handleDrop(e, index)}
                     className={`flex items-center gap-1 p-2 rounded-md cursor-pointer hover:bg-accent ${
-                      selectedDoc?.id === doc.id ? 'bg-accent' : ''
+                      selectedDoc?.id === doc.id ? 'bg-accent ring-1 ring-primary' : ''
                     } ${dragOverIndex === index ? 'border-t-2 border-primary' : ''}`}
                     onClick={() => setSelectedDoc(doc)}
                   >
@@ -292,6 +298,7 @@ export default function BookEditor({ projectId }: { projectId: string }) {
               </div>
               <div className="flex-1 overflow-hidden">
                 <TipTapEditor
+                  key={selectedDoc.id}
                   ref={editorRef}
                   content={selectedDoc.content}
                   onChange={handleDocContentChange}
@@ -325,8 +332,12 @@ export default function BookEditor({ projectId }: { projectId: string }) {
             getSelectedText={() => editorRef.current?.getSelectionInfo()?.text || ''}
             getFullContext={() => selectedDoc?.content || ''}
             onInsert={handleInsertText}
+            onAppend={handleAppendText}
             projectId={projectId}
             currentDocumentId={selectedDoc?.id}
+            currentDocumentTitle={selectedDoc?.title}
+            currentDocumentType={selectedDoc?.doc_type}
+            currentFieldName="content"
             onCollapseChange={setSidebarCollapsed}
           />
         </div>

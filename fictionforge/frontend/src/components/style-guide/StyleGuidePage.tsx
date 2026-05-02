@@ -225,6 +225,8 @@ export default function StyleGuidePage({ projectId }: { projectId: string }) {
             onInsert={handleInsertText}
             projectId={projectId}
             currentDocumentId={selectedEntry?.id}
+            currentDocumentType="style_guide"
+            currentFieldName="content"
             onCollapseChange={setSidebarCollapsed}
           />
         </div>

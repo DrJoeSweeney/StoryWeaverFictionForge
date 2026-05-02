@@ -56,6 +56,7 @@ export interface TipTapEditorRef {
   getSelectionInfo: () => { text: string; from: number; to: number; empty: boolean } | null
   replaceSelection: (text: string) => void
   insertAtCursor: (text: string) => void
+  appendToEnd: (text: string) => void
   focus: () => void
   isFocused: () => boolean
   getContent: () => string
@@ -173,6 +174,12 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
         const html = postprocessWikiLinksAndTags(marked.parse(text, { async: false }) as string)
         editor.chain().focus().insertContent(html).run()
       },
+      appendToEnd: (text: string) => {
+        if (!editor || editor.isDestroyed) return
+        const html = postprocessWikiLinksAndTags(marked.parse(text, { async: false }) as string)
+        // Move to end and insert
+        editor.chain().focus().setTextSelection(editor.state.doc.content.size).insertContent(html).run()
+      },
       focus: () => {
         if (!editor || editor.isDestroyed) return
         editor.commands.focus()
@@ -206,6 +213,31 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
         })
       }
     }, [content, editor])
+
+    // Dynamically size .ProseMirror to fill the scroll container so empty docs
+    // still show a full-height typing area, while letting it grow with content.
+    useEffect(() => {
+      if (!editor || editor.isDestroyed) return
+      const pm = editor.view.dom as HTMLElement
+      const scrollContainer = pm.closest('.overflow-auto') as HTMLElement | null
+      if (!scrollContainer) return
+
+      const setMinHeight = () => {
+        if (!pm.isConnected) return
+        const height = scrollContainer.clientHeight
+        if (height > 0) {
+          pm.style.minHeight = `${height}px`
+        }
+      }
+
+      requestAnimationFrame(setMinHeight)
+      const ro = new ResizeObserver(setMinHeight)
+      ro.observe(scrollContainer)
+      return () => {
+        ro.disconnect()
+        pm.style.minHeight = ''
+      }
+    }, [editor])
 
     const handleMarkdownChange = (value: string) => {
       setMarkdownValue(value)
@@ -289,17 +321,27 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
         <EditorAutocomplete editor={editor} documents={documents} tags={tags} />
 
         {/* Editor */}
-        <div className="flex-1 overflow-auto">
+        <div className="flex-1 overflow-auto flex flex-col">
           {viewMode === 'paper' ? (
-            <EditorContent
-              editor={editor}
-              className="prose prose-sm dark:prose-invert max-w-none p-4 h-full focus:outline-none"
-            />
+            <div
+              onClick={(e) => {
+                const target = e.target as HTMLElement
+                const pm = target.closest('.ProseMirror')
+                if (!pm && editor && !editor.isDestroyed) {
+                  editor.commands.focus('end')
+                }
+              }}
+            >
+              <EditorContent
+                editor={editor}
+                className="prose prose-sm dark:prose-invert max-w-none focus:outline-none"
+              />
+            </div>
           ) : (
             <textarea
               value={markdownValue}
               onChange={(e) => handleMarkdownChange(e.target.value)}
-              className="w-full h-full p-4 bg-background font-mono text-sm leading-relaxed resize-none focus:outline-none"
+              className="w-full flex-1 p-4 bg-background font-mono text-sm leading-relaxed resize-none border-0 focus:outline-none"
               spellCheck={false}
             />
           )}

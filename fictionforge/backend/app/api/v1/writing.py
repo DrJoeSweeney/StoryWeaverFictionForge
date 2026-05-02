@@ -37,6 +37,8 @@ class AgenticRequest(BaseModel):
     prompt: str = ""  # Raw user prompt for classification
     reasoning_provider: str | None = None
     reasoning_model: str | None = None
+    document_type: str | None = None
+    field_name: str | None = None
 
 
 async def get_user_provider(db: AsyncSession, user: User, provider: str | None = None):
@@ -50,7 +52,7 @@ async def get_user_provider(db: AsyncSession, user: User, provider: str | None =
         query = query.where(AIProviderConfig.provider == provider)
     
     result = await db.execute(query)
-    config = result.scalar_one_or_none()
+    config = result.scalars().first()
     
     if not config:
         raise HTTPException(status_code=400, detail="No AI provider configured. Please add an API key in settings.")
@@ -211,6 +213,8 @@ async def agentic(
             action=req.action,
             prompt_text=req.prompt,
             reasoning_model=req.reasoning_model or "",
+            document_type=req.document_type,
+            field_name=req.field_name,
         )
         return result
     except Exception as e:

@@ -20,6 +20,23 @@ interface AIConfig {
 interface Skill {
   id: string
   name: string
+  description: string | null
+  category: string
+  prompt_template: string
+  system_prompt: string | null
+  variables: string | null
+  example_input: string | null
+  example_output: string | null
+  action: string | null
+  context_sources: string | null
+  specific_documents: string | null
+  cross_skill_refs: string | null
+  is_agentic: boolean
+  is_locked: boolean
+  is_quick_action: boolean
+  icon: string | null
+  temperature: number | null
+  model: string | null
 }
 
 export interface ChatMessage {
@@ -57,6 +74,13 @@ export interface AgenticResponse {
   consulted_docs: ConsultedDoc[]
 }
 
+export type InteractionMode =
+  | 'normal'
+  | 'outline_creation_planning'
+  | 'outline_creation_pending'
+  | 'outline_to_text_confirm'
+  | 'outline_to_text_writing'
+
 const AI_MODEL_KEY = 'fictionforge-ai-model'
 const AI_PROVIDER_KEY = 'fictionforge-ai-provider'
 
@@ -85,6 +109,11 @@ export function useAIWriting() {
   const [lastTier, setLastTier] = useState<string>('')
   const [consultedDocs, setConsultedDocs] = useState<ConsultedDoc[]>([])
   const [isAgentic, setIsAgentic] = useState(false)
+
+  const [interactionMode, setInteractionMode] = useState<InteractionMode>('normal')
+  const [pendingOutlinePlan, setPendingOutlinePlan] = useState<string | null>(null)
+  const [outlineSections, setOutlineSections] = useState<Array<{ title: string; description: string }>>([])
+  const [currentSectionIndex, setCurrentSectionIndex] = useState(-1)
 
   const { data: activeModels } = useQuery({
     queryKey: ['ai-active-models'],
@@ -162,15 +191,29 @@ export function useAIWriting() {
     return `Respond in ${names[lang] || lang}. Use appropriate spelling and vocabulary for this language.`
   }
 
+  const getSkillSystemPrompt = (actionOrSkillId: string, fallback: string): string => {
+    // Try lookup by action field first
+    const byAction = skills?.find((s) => s.action === actionOrSkillId)
+    if (byAction?.system_prompt) {
+      return byAction.system_prompt + ' ' + getLanguageInstruction()
+    }
+    // Try lookup by skill ID
+    const byId = skills?.find((s) => s.id === actionOrSkillId)
+    if (byId?.system_prompt) {
+      return byId.system_prompt + ' ' + getLanguageInstruction()
+    }
+    return fallback + ' ' + getLanguageInstruction()
+  }
+
   const getSystemPrompt = (act: string) => {
-    const prompts: Record<string, string> = {
+    const fallbacks: Record<string, string> = {
       continue: 'You are a creative writing assistant. Continue the story naturally from where it left off. Match the tone and style of the existing text. Write 2-4 paragraphs.',
       rewrite: 'You are a creative writing assistant. Rewrite the selected text to improve flow, clarity, and impact while preserving the meaning. Maintain the same tone.',
       describe: 'You are a creative writing assistant. Rewrite the selected text with vivid sensory details — sights, sounds, smells, textures, emotions. Make it immersive.',
       shorten: 'You are a creative writing assistant. Make the selected text more concise without losing meaning or impact. Cut unnecessary words.',
       expand: 'You are a creative writing assistant. Expand the selected text with more detail, subtext, and emotional depth. Add 2-3x the length.',
     }
-    return (prompts[act] || prompts.continue) + ' ' + getLanguageInstruction()
+    return getSkillSystemPrompt(act, fallbacks[act] || fallbacks.continue)
   }
 
   const buildUserPrompt = (act: string, selection: string, context: string, custom: string) => {
@@ -222,6 +265,10 @@ export function useAIWriting() {
     setReasoningLog([])
     setLastTier('')
     setConsultedDocs([])
+    setInteractionMode('normal')
+    setPendingOutlinePlan(null)
+    setOutlineSections([])
+    setCurrentSectionIndex(-1)
   }, [])
 
   const detectPlanMode = (text: string): boolean => {
@@ -271,6 +318,35 @@ export function useAIWriting() {
     return (hasCreate && hasDoc) || hasPhrase
   }
 
+  const detectOutlineCreationMode = (text: string): boolean => {
+    const t = text.toLowerCase().trim()
+    if (t.startsWith('/outline') || t.startsWith('/structure')) return true
+    const phrases = [
+      'create an outline', 'make an outline', 'generate an outline',
+      'outline for', 'outline this', 'structure for', 'structure this',
+      'plan the structure', 'create a structure', 'build an outline',
+      'outline the', 'structure the', 'outline of', 'structure of',
+      'create outline', 'make outline', 'generate outline',
+      'create structure', 'make structure', 'generate structure',
+      'give me an outline', 'need an outline', 'want an outline',
+    ]
+    return phrases.some((p) => t.includes(p))
+  }
+
+  const detectWriteOutlineMode = (text: string): boolean => {
+    const t = text.toLowerCase().trim()
+    if (t.startsWith('/writeoutline') || t.startsWith('/fleshout')) return true
+    const phrases = [
+      'write this outline', 'flesh out this outline', 'expand this outline',
+      'write from outline', 'write the outline', 'write this structure',
+      'flesh out', 'write out the outline', 'turn outline into text',
+      'write based on outline', 'write based on this',
+      'write from this outline', 'write from this structure',
+      'turn this outline into', 'turn this structure into',
+    ]
+    return phrases.some((p) => t.includes(p))
+  }
+
   const parsePlan = (text: string): DocumentPlan | null => {
     try {
       // Try to find JSON in the response (may be wrapped in markdown or plain text)
@@ -305,7 +381,7 @@ export function useAIWriting() {
     setLoading(true)
     setIsAgentic(true)
     try {
-      const systemPrompt = `You are a writing assistant helping an author plan new documents. ${getLanguageInstruction()}
+      const systemPrompt = getSkillSystemPrompt('plan', `You are a writing assistant helping an author plan new documents.
 
 If the user's request IS about creating new documents, chapters, scenes, notes, or pages, analyze their request and produce a structured plan.
 
@@ -314,7 +390,7 @@ Respond with a JSON object in this exact format (no markdown code blocks, no ext
 
 Use appropriate doc_type values: chapter, prologue, epilogue, note, scene, part, etc.
 
-If the user's request is NOT about creating documents, just answer their question normally in plain text. Do not force JSON if they are asking a general question.`
+If the user's request is NOT about creating documents, just answer their question normally in plain text. Do not force JSON if they are asking a general question.`)
 
       // Strip /plan or /create prefix if present
       const cleanPrompt = promptText.replace(/^\/(plan|create)\s*/i, '')
@@ -378,7 +454,7 @@ If the user's request is NOT about creating documents, just answer their questio
         plan: pendingPlan.plan,
         documents: pendingPlan.documents,
       })
-      const systemPrompt = `You are a writing assistant helping an author revise a document plan. ${getLanguageInstruction()}
+      const systemPrompt = getSkillSystemPrompt('plan', `You are a writing assistant helping an author revise a document plan.
 
 The user previously requested a document plan. Here is the current plan:
 ${previousPlanJson}
@@ -388,7 +464,7 @@ The user has provided feedback or suggestions. Incorporate their feedback and re
 Respond with a JSON object in this exact format (no markdown code blocks, no extra commentary):
 {"plan":"Brief description of the plan","documents":[{"title":"Title","description":"What this document will contain","doc_type":"chapter"}]}
 
-Use appropriate doc_type values: chapter, prologue, epilogue, note, scene, part, etc.`
+Use appropriate doc_type values: chapter, prologue, epilogue, note, scene, part, etc.`)
 
       const userPrompt = `Feedback: ${feedback}\n\nCurrent project context:\n${fullContext.slice(0, 2000)}`
       const messages = buildApiMessages(systemPrompt, userPrompt)
@@ -439,6 +515,373 @@ Use appropriate doc_type values: chapter, prologue, epilogue, note, scene, part,
       setLoading(false)
     }
   }, [model, provider, includeStyleGuide, chatMessages, pendingPlan])
+
+  const generateOutlinePlan = useCallback(async (promptText: string, fullContext: string, projectId?: string) => {
+    if (!model) return
+    setLoading(true)
+    setIsAgentic(true)
+    setInteractionMode('outline_creation_planning')
+    try {
+      const systemPrompt = getSkillSystemPrompt('outline_plan', `You are a creative writing assistant specializing in story structure and outlining.
+
+The user wants to create an outline or structure for their current document. Your task is to analyze their request and the available project context, then present a clear, well-reasoned plan for the outline/structure.
+
+Consider the following when making your plan:
+- World-building and setting details (from story bible)
+- Character arcs, relationships, and development needs
+- Existing story plans or outlines
+- Narrative structure appropriate for the genre and content
+- Pacing and dramatic tension
+
+Present your plan in a clear format with:
+1. An overview of the proposed structure
+2. A breakdown of each section/part with title and brief description of what it should contain
+3. Rationale for why this structure works for the story
+
+Do NOT write the actual outline yet — just present the plan. Ask the user if they approve or want changes.`)
+
+      const userPrompt = `Request: ${promptText}\n\nCurrent document content:\n${fullContext.slice(0, 3000)}`
+      const messages = buildApiMessages(systemPrompt, userPrompt)
+      const body: any = {
+        messages,
+        provider: provider || undefined,
+        model: model || undefined,
+        temperature: 0.8,
+        action: 'outline_plan',
+        prompt: promptText,
+        ...getReasoningModelPrefs(),
+      }
+      if (projectId) {
+        body.project_id = projectId
+        if (includeStyleGuide) {
+          body.include_style_guide = true
+        }
+      }
+      const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
+      const text = res.data.content
+      setReasoningLog(res.data.reasoning_log || [])
+      setLastTier(res.data.tier || '')
+      setConsultedDocs(res.data.consulted_docs || [])
+      setChatMessages((prev) => [
+        ...prev,
+        { role: 'user', content: promptText },
+        {
+          role: 'assistant',
+          content:
+            text +
+            '\n\n---\n\n**Would you like me to generate this outline?**\n- Type **yes** to generate the full outline with suggested word counts\n- Type **(clear)** to clear the chat and start over\n- Or add more context/suggestions to refine the plan',
+          isPlan: true,
+        },
+      ])
+      setPendingOutlinePlan(text)
+      setPendingPlan(null)
+      setInteractionMode('outline_creation_pending')
+    } catch (err: any) {
+      setChatMessages((prev) => [
+        ...prev,
+        { role: 'user', content: promptText },
+        { role: 'assistant', content: `Error: ${err.response?.data?.detail || err.message}` },
+      ])
+      setInteractionMode('normal')
+    } finally {
+      setLoading(false)
+    }
+  }, [model, provider, includeStyleGuide, chatMessages])
+
+  const regenerateOutlinePlan = useCallback(async (feedback: string, fullContext: string, projectId?: string) => {
+    if (!model || !pendingOutlinePlan) return
+    setLoading(true)
+    setIsAgentic(true)
+    setInteractionMode('outline_creation_planning')
+    try {
+      const systemPrompt = getSkillSystemPrompt('outline_plan', `You are a creative writing assistant specializing in story structure.
+
+You previously presented this outline plan:
+${pendingOutlinePlan}
+
+The user has provided feedback or additional context. Incorporate their feedback and present a revised plan.
+
+Consider:
+- World-building and setting details
+- Character arcs and development
+- Existing story plans
+- Narrative structure and pacing
+
+Present the revised plan clearly and ask if they approve or want further changes.`)
+
+      const userPrompt = `Feedback/additional context: ${feedback}\n\nCurrent document content:\n${fullContext.slice(0, 3000)}`
+      const messages = buildApiMessages(systemPrompt, userPrompt)
+      const body: any = {
+        messages,
+        provider: provider || undefined,
+        model: model || undefined,
+        temperature: 0.8,
+        action: 'outline_plan',
+        prompt: feedback,
+        ...getReasoningModelPrefs(),
+      }
+      if (projectId) {
+        body.project_id = projectId
+        if (includeStyleGuide) {
+          body.include_style_guide = true
+        }
+      }
+      const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
+      const text = res.data.content
+      setReasoningLog(res.data.reasoning_log || [])
+      setLastTier(res.data.tier || '')
+      setConsultedDocs(res.data.consulted_docs || [])
+      setChatMessages((prev) => [
+        ...prev,
+        { role: 'user', content: feedback },
+        {
+          role: 'assistant',
+          content:
+            text +
+            '\n\n---\n\n**Would you like me to generate this outline?**\n- Type **yes** to generate the full outline with suggested word counts\n- Type **(clear)** to clear the chat and start over\n- Or add more context/suggestions to refine the plan',
+          isPlan: true,
+        },
+      ])
+      setPendingOutlinePlan(text)
+      setInteractionMode('outline_creation_pending')
+    } catch (err: any) {
+      setChatMessages((prev) => [
+        ...prev,
+        { role: 'user', content: feedback },
+        { role: 'assistant', content: `Error: ${err.response?.data?.detail || err.message}` },
+      ])
+      setInteractionMode('normal')
+    } finally {
+      setLoading(false)
+    }
+  }, [model, provider, includeStyleGuide, chatMessages, pendingOutlinePlan])
+
+  const generateOutlineContent = useCallback(async (fullContext: string, projectId?: string): Promise<string | null> => {
+    if (!model || !pendingOutlinePlan) return null
+    setLoading(true)
+    setIsAgentic(true)
+    try {
+      const systemPrompt = getSkillSystemPrompt('outline_generate', `You are a creative writing assistant specializing in story structure.
+
+You have already presented and received approval for the following plan:
+${pendingOutlinePlan}
+
+Now, generate the COMPLETE outline/structure based on this plan. For each section, provide:
+1. The section title/heading
+2. A detailed description of what should be written in that section — sufficient detail for a writer or AI to later flesh it out
+3. A suggested word count for the section, based on its importance and complexity
+
+Format the outline clearly using markdown headings and bullet points. Make it detailed and actionable.`)
+
+      const userPrompt = `Generate the full outline based on the approved plan.\n\nCurrent document content:\n${fullContext.slice(0, 2000)}`
+      const messages = buildApiMessages(systemPrompt, userPrompt)
+      const body: any = {
+        messages,
+        provider: provider || undefined,
+        model: model || undefined,
+        temperature: 0.8,
+        action: 'outline_generate',
+        prompt: 'Generate full outline based on approved plan',
+        ...getReasoningModelPrefs(),
+      }
+      if (projectId) {
+        body.project_id = projectId
+        if (includeStyleGuide) {
+          body.include_style_guide = true
+        }
+      }
+      const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
+      const text = res.data.content
+      setReasoningLog(res.data.reasoning_log || [])
+      setLastTier(res.data.tier || '')
+      setConsultedDocs(res.data.consulted_docs || [])
+      setChatMessages((prev) => [
+        ...prev,
+        { role: 'user', content: 'yes' },
+        { role: 'assistant', content: '**Outline generated!**\n\n' + text },
+      ])
+      setPendingOutlinePlan(null)
+      setInteractionMode('normal')
+      return text
+    } catch (err: any) {
+      setChatMessages((prev) => [
+        ...prev,
+        { role: 'user', content: 'yes' },
+        { role: 'assistant', content: `Error: ${err.response?.data?.detail || err.message}` },
+      ])
+      return null
+    } finally {
+      setLoading(false)
+    }
+  }, [model, provider, includeStyleGuide, chatMessages, pendingOutlinePlan])
+
+  const parseOutline = useCallback(async (fullContext: string, projectId?: string): Promise<Array<{ title: string; description: string }>> => {
+    if (!model) return []
+    try {
+      const systemPrompt = getSkillSystemPrompt('outline_parse', `You are a writing assistant. Parse the following document into a structured list of sections to write. Return ONLY a JSON array in this exact format:
+[{"title":"Section Title","description":"What this section should contain"}]
+Do not include any markdown formatting, commentary, or explanation — just the raw JSON.`)
+      const userPrompt = `Parse this outline/document into sections:\n\n${fullContext.slice(0, 6000)}`
+      const messages = [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ]
+      const body: any = {
+        messages,
+        provider: provider || undefined,
+        model: model || undefined,
+        temperature: 0.3,
+        action: 'outline_parse',
+        prompt: 'Parse outline into sections',
+        ...getReasoningModelPrefs(),
+      }
+      if (projectId) {
+        body.project_id = projectId
+        if (includeStyleGuide) {
+          body.include_style_guide = true
+        }
+      }
+      const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
+      const text = res.data.content
+      let jsonStr = text
+      const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/)
+      if (codeBlockMatch) jsonStr = codeBlockMatch[1]
+      const braceMatch = jsonStr.match(/\[[\s\S]*\]/)
+      if (braceMatch) jsonStr = braceMatch[0]
+      const parsed = JSON.parse(jsonStr)
+      if (Array.isArray(parsed)) return parsed
+      return []
+    } catch {
+      return []
+    }
+  }, [model, provider, includeStyleGuide])
+
+  const writeOutlineSection = useCallback(async (
+    section: { title: string; description: string },
+    fullContext: string,
+    previousText: string,
+    projectId?: string
+  ): Promise<string> => {
+    if (!model) throw new Error('No model selected')
+    setIsAgentic(true)
+    const systemPrompt = getSkillSystemPrompt('outline_section_write', `You are a creative writing assistant.
+
+You are writing a section of a larger document based on an outline. Write the complete prose for this section only.
+
+Rules:
+- Write fully fleshed-out prose, not summaries or notes
+- Match the tone and style of any existing text
+- Use the provided world-building, character, and style information
+- Do not include meta-commentary or explanations
+- Do not repeat information from previous sections unless necessary for continuity
+- Write naturally and engagingly`)
+
+    const userPrompt = `Section to write: ${section.title}
+Description: ${section.description}
+
+${previousText ? `Previously written text:\n${previousText.slice(-2000)}\n\n` : ''}Current document context:\n${fullContext.slice(0, 2000)}
+
+Write the full prose for this section only.`
+
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ]
+    const body: any = {
+      messages,
+      provider: provider || undefined,
+      model: model || undefined,
+      temperature: 0.8,
+      action: 'outline_section_write',
+      prompt: `Write section: ${section.title}`,
+      ...getReasoningModelPrefs(),
+    }
+    if (projectId) {
+      body.project_id = projectId
+      if (includeStyleGuide) {
+        body.include_style_guide = true
+      }
+    }
+    const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
+    return res.data.content
+  }, [model, provider, includeStyleGuide])
+
+  const writeOutlineToText = useCallback(async (fullContext: string, projectId?: string, onAppend?: (text: string) => void) => {
+    if (!model) return
+    setLoading(true)
+    setIsAgentic(true)
+    setInteractionMode('outline_to_text_writing')
+    try {
+      setChatMessages((prev) => [
+        ...prev,
+        { role: 'user', content: 'yes' },
+        { role: 'assistant', content: '⏳ Parsing outline and preparing to write...' },
+      ])
+
+      const sections = await parseOutline(fullContext, projectId)
+      if (!sections.length) {
+        setChatMessages((prev) => [
+          ...prev,
+          { role: 'assistant', content: '❌ Could not parse the outline into sections. Please make sure the current document contains a clear outline or structure.' },
+        ])
+        setInteractionMode('normal')
+        return
+      }
+
+      setOutlineSections(sections)
+      let accumulatedText = ''
+
+      for (let i = 0; i < sections.length; i++) {
+        const section = sections[i]
+        setCurrentSectionIndex(i)
+        setChatMessages((prev) => [
+          ...prev,
+          { role: 'assistant', content: `⏳ Writing **${section.title}** (${i + 1}/${sections.length})...` },
+        ])
+
+        const text = await writeOutlineSection(section, fullContext, accumulatedText, projectId)
+        accumulatedText += '\n\n' + text
+
+        if (onAppend) {
+          onAppend(text + '\n\n')
+        }
+
+        setChatMessages((prev) => [
+          ...prev,
+          { role: 'assistant', content: `✅ Completed **${section.title}**` },
+        ])
+      }
+
+      setChatMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: `🎉 Done! Wrote ${sections.length} section(s). The full text has been appended to your document.` },
+      ])
+      setOutlineSections([])
+      setCurrentSectionIndex(-1)
+      setInteractionMode('normal')
+    } catch (err: any) {
+      setChatMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: `❌ Error: ${err.response?.data?.detail || err.message}` },
+      ])
+      setInteractionMode('normal')
+    } finally {
+      setLoading(false)
+    }
+  }, [model, provider, includeStyleGuide, parseOutline, writeOutlineSection])
+
+  const initiateWriteOutline = useCallback(async () => {
+    setPendingPlan(null)
+    setChatMessages((prev) => [
+      ...prev,
+      {
+        role: 'assistant',
+        content:
+          '**Outline-to-Text Mode**\n\nIt looks like you want me to write out the outline/structure in the current document. I will systematically work through the entire structure and write the full prose text chunk by chunk, using the style guide, world information, notes, and character details.\n\nThe final text will be appended to the end of the current document.\n\n**Should I proceed?** Type **yes** to start writing, or **cancel** to abort.',
+      },
+    ])
+    setInteractionMode('outline_to_text_confirm')
+  }, [])
 
   const generate = useCallback(async (selectedText: string, fullContext: string, projectId?: string) => {
     if (!model) return
@@ -501,9 +944,56 @@ Use appropriate doc_type values: chapter, prologue, epilogue, note, scene, part,
       return
     }
 
+    // Handle outline creation pending state
+    if (interactionMode === 'outline_creation_pending') {
+      if (lowerPrompt === 'yes' || lowerPrompt === '(yes)') {
+        const outlineText = await generateOutlineContent(fullContext, projectId)
+        setCustomPrompt('')
+        return outlineText
+      } else if (lowerPrompt === '(clear)' || lowerPrompt === 'clear') {
+        clearChat()
+        setCustomPrompt('')
+        return
+      } else {
+        await regenerateOutlinePlan(promptText, fullContext, projectId)
+        setCustomPrompt('')
+        return
+      }
+    }
+
+    // Handle outline-to-text confirm state
+    if (interactionMode === 'outline_to_text_confirm') {
+      if (lowerPrompt === 'yes' || lowerPrompt === '(yes)') {
+        setCustomPrompt('')
+        return 'outline_to_text_confirmed'
+      } else {
+        setChatMessages((prev) => [
+          ...prev,
+          { role: 'assistant', content: 'Outline-to-text writing cancelled.' },
+        ])
+        setInteractionMode('normal')
+        setCustomPrompt('')
+        return
+      }
+    }
+
     // If a plan is pending, treat input as feedback to regenerate the plan
     if (pendingPlan) {
       await regeneratePlan(promptText, fullContext, projectId)
+      setCustomPrompt('')
+      return
+    }
+
+    // Detect outline creation mode
+    if (detectOutlineCreationMode(promptText)) {
+      await generateOutlinePlan(promptText, fullContext, projectId)
+      setCustomPrompt('')
+      return
+    }
+
+    // Detect outline-to-text mode
+    if (detectWriteOutlineMode(promptText)) {
+      await initiateWriteOutline()
       setCustomPrompt('')
       return
     }
@@ -544,13 +1034,13 @@ Use appropriate doc_type values: chapter, prologue, epilogue, note, scene, part,
       setReasoningLog(reasoning_log || [])
       setLastTier(tier || '')
       setConsultedDocs(consulted_docs || [])
-      setChatMessages(prev => [
+      setChatMessages((prev) => [
         ...prev,
         { role: 'user', content: userPrompt },
         { role: 'assistant', content: content },
       ])
     } catch (err: any) {
-      setChatMessages(prev => [
+      setChatMessages((prev) => [
         ...prev,
         { role: 'user', content: buildUserPrompt(action, selectedText || fullContext.slice(-500), fullContext, promptText) },
         { role: 'assistant', content: `Error: ${err.response?.data?.detail || err.message}` },
@@ -558,7 +1048,7 @@ Use appropriate doc_type values: chapter, prologue, epilogue, note, scene, part,
     } finally {
       setLoading(false)
     }
-  }, [action, model, provider, includeStyleGuide, customPrompt, chatMessages, clearChat, generatePlan])
+  }, [action, model, provider, includeStyleGuide, customPrompt, chatMessages, clearChat, generatePlan, interactionMode, pendingOutlinePlan, pendingPlan, generateOutlinePlan, regenerateOutlinePlan, generateOutlineContent, initiateWriteOutline])
 
   const generateDocumentContent = useCallback(async (doc: DocumentPlanItem, fullContext: string, projectId?: string): Promise<string> => {
     if (!model) throw new Error('No model selected')
@@ -567,14 +1057,14 @@ Use appropriate doc_type values: chapter, prologue, epilogue, note, scene, part,
     setLastTier('')
     setConsultedDocs([])
     console.log('[AI] Generating content for:', doc.title)
-    const systemPrompt = `You are a creative writing assistant. ${getLanguageInstruction()}
+    const systemPrompt = getSkillSystemPrompt('draft', `You are a creative writing assistant.
 
 Write the complete content for the following document.
 
 Title: ${doc.title}
 Description: ${doc.description}
 
-Write the full text as it would appear in the final document. Do not include meta-commentary, outlines, or chapter headings unless they are part of the actual content. Just write the prose.`
+Write the full text as it would appear in the final document. Do not include meta-commentary, outlines, or chapter headings unless they are part of the actual content. Just write the prose.`)
 
     const userPrompt = `Write the complete content for "${doc.title}".\n\nProject context:\n${fullContext.slice(0, 2000)}`
     const messages = [
@@ -606,6 +1096,51 @@ Write the full text as it would appear in the final document. Do not include met
     }
   }, [model, provider, includeStyleGuide])
 
+  const executeSkill = useCallback(async (skillId: string, selectedText: string, fullContext: string, projectId?: string, documentType?: string, fieldName?: string): Promise<string> => {
+    if (!model) throw new Error('No model selected')
+    setLoading(true)
+    setIsAgentic(true)
+    setReasoningLog([])
+    setLastTier('')
+    setConsultedDocs([])
+    try {
+      const body: any = {
+        messages: [
+          { role: 'system', content: '' },
+          { role: 'user', content: selectedText || fullContext.slice(-500) },
+        ],
+        context: { text: selectedText, fullContext, documentType, fieldName },
+        provider: provider || undefined,
+        model: model || undefined,
+        project_id: projectId || undefined,
+        document_type: documentType || undefined,
+        field_name: fieldName || undefined,
+        ...getReasoningModelPrefs(),
+      }
+      const res = await api.post<AgenticResponse>(`/skills/${skillId}/execute`, body, { timeout: 300000 })
+      const { content, reasoning_log, tier, consulted_docs } = res.data
+      setReasoningLog(reasoning_log || [])
+      setLastTier(tier || '')
+      setConsultedDocs(consulted_docs || [])
+      setChatMessages((prev) => [
+        ...prev,
+        { role: 'user', content: `[Skill: ${skillId}] ${selectedText || fullContext.slice(-200)}` },
+        { role: 'assistant', content: content },
+      ])
+      return content
+    } catch (err: any) {
+      const msg = `Error: ${err.response?.data?.detail || err.message}`
+      setChatMessages((prev) => [
+        ...prev,
+        { role: 'user', content: `[Skill: ${skillId}] ${selectedText || fullContext.slice(-200)}` },
+        { role: 'assistant', content: msg },
+      ])
+      throw err
+    } finally {
+      setLoading(false)
+    }
+  }, [model, provider, includeStyleGuide, chatMessages])
+
   const execute = useCallback(async (act: string, selectedText: string, fullContext: string, projectId?: string): Promise<string> => {
     if (!model) throw new Error('No model selected')
     const systemPrompt = getSystemPrompt(act)
@@ -622,7 +1157,7 @@ Write the full text as it would appear in the final document. Do not include met
     return assistantContent
   }, [model, provider, includeStyleGuide, chatMessages])
 
-  const agenticExecute = useCallback(async (act: string, selectedText: string, fullContext: string, projectId?: string): Promise<string> => {
+  const agenticExecute = useCallback(async (act: string, selectedText: string, fullContext: string, projectId?: string, documentType?: string, fieldName?: string): Promise<string> => {
     if (!model) throw new Error('No model selected')
     setIsAgentic(true)
     setReasoningLog([])
@@ -638,6 +1173,8 @@ Write the full text as it would appear in the final document. Do not include met
       temperature: 0.8,
       action: act,
       prompt: userPrompt,
+      document_type: documentType || undefined,
+      field_name: fieldName || undefined,
       ...getReasoningModelPrefs(),
     }
     if (projectId) {
@@ -777,5 +1314,14 @@ Write the full text as it would appear in the final document. Do not include met
     lastTier,
     consultedDocs,
     isAgentic,
+    interactionMode,
+    generateOutlinePlan,
+    regenerateOutlinePlan,
+    generateOutlineContent,
+    initiateWriteOutline,
+    writeOutlineToText,
+    currentSectionIndex,
+    outlineSections,
+    executeSkill,
   }
 }

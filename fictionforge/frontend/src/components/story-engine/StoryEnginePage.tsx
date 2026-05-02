@@ -370,6 +370,8 @@ export default function StoryEnginePage({ projectId }: { projectId: string }) {
             getFullContext={() => getBeatContext(activeBeat)}
             onInsert={handleInsertText}
             projectId={projectId}
+            currentDocumentType="outline"
+            currentFieldName={activeBeat ? 'beat_description' : 'outline_content'}
             onCollapseChange={setSidebarCollapsed}
           />
         </div>

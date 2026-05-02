@@ -110,6 +110,13 @@
   text-decoration-color: hsl(210 100% 70%);
 }
 
+/* ProseMirror editor surface — visible border and fills container so empty docs still show a typing area */
+.ProseMirror {
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) - 2px);
+  padding: 1rem;
+}
+
 /* Content tags: #my-tag */
 .content-tag {
   color: hsl(280 65% 45%);

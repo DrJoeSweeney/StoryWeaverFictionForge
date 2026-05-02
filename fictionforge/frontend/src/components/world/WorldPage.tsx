@@ -305,6 +305,8 @@ export default function WorldPage({ projectId }: { projectId: string }) {
             onInsert={handleInsertText}
             projectId={projectId}
             currentDocumentId={selectedEntry?.id}
+            currentDocumentType="story_bible"
+            currentFieldName="content"
             onCollapseChange={setSidebarCollapsed}
           />
         </div>
