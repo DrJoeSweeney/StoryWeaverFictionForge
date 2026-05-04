@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useMemo } from 'react'
 import type { TipTapEditorRef } from '@/components/editor/TipTapEditor'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
@@ -6,6 +6,9 @@ import { Plus, Trash2, Loader2, Palette } from 'lucide-react'
 import TipTapEditor from '@/components/editor/TipTapEditor'
 import AIWritingSidebar from '@/components/writing/AIWritingSidebar'
 import { useProjectTags } from '@/hooks/useProjectTags'
+import DraggableTreePanel from '@/components/shared/DraggableTreePanel'
+import ResizablePanel from '@/components/shared/ResizablePanel'
+import FrontmatterEditor from '@/components/editor/FrontmatterEditor'
 
 interface ProjectDocument {
   id: string
@@ -18,13 +21,17 @@ interface StyleGuideEntry {
   title: string
   content: string
   word_count: number
+  module: string
+  classification: string
+  [key: string]: any
 }
+
+const SG_SYSTEM_FIELDS = ['id', 'created_at', 'updated_at', 'project_id', 'word_count', 'content', 'title', 'module', 'classification', 'parent_id', 'sort_order']
 
 export default function StyleGuidePage({ projectId }: { projectId: string }) {
   const [selectedEntry, setSelectedEntry] = useState<StyleGuideEntry | null>(null)
   const [showNewForm, setShowNewForm] = useState(false)
   const [newTitle, setNewTitle] = useState('')
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const editorRef = useRef<TipTapEditorRef>(null)
   const queryClient = useQueryClient()
 
@@ -72,6 +79,28 @@ export default function StyleGuidePage({ projectId }: { projectId: string }) {
     },
   })
 
+  const reorderMutation = useMutation({
+    mutationFn: (itemIds: string[]) =>
+      api.post(`/style-guide/reorder`, { project_id: projectId, item_ids: itemIds }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['style-guide', projectId] })
+    },
+  })
+
+  const nestMutation = useMutation({
+    mutationFn: ({ id, parent_id }: { id: string; parent_id: string | null }) =>
+      api.put(`/style-guide/${id}`, { parent_id }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['style-guide', projectId] })
+    },
+  })
+
+  const treeItems = (entries || []).map((e) => ({
+    ...e,
+    parent_id: (e as any).parent_id || null,
+    sort_order: (e as any).sort_order || 0,
+  }))
+
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault()
     if (!newTitle.trim()) return
@@ -87,6 +116,39 @@ export default function StyleGuidePage({ projectId }: { projectId: string }) {
       editorRef.current.insertAtCursor(text)
     }
     editorRef.current.focus()
+  }
+
+  const getFrontmatter = (entry: StyleGuideEntry): Record<string, any> => {
+    return Object.fromEntries(Object.entries(entry).filter(([k, v]) => {
+      if (SG_SYSTEM_FIELDS.includes(k)) return false
+      if (v === null || v === undefined) return true
+      const t = typeof v
+      if (t === 'string' || t === 'number' || t === 'boolean') return true
+      if (Array.isArray(v)) return v.every((item) => typeof item !== 'object')
+      return false
+    }))
+  }
+
+  const existingFrontmatterKeys = useMemo(() => {
+    const keys = new Set<string>()
+    for (const entry of entries || []) {
+      for (const key of Object.keys(entry)) {
+        if (!SG_SYSTEM_FIELDS.includes(key)) {
+          keys.add(key)
+        }
+      }
+    }
+    return Array.from(keys).sort()
+  }, [entries])
+
+  const handleFrontmatterChange = (newFrontmatter: Record<string, any>) => {
+    if (!selectedEntry) return
+    const oldFrontmatter = getFrontmatter(selectedEntry)
+    const deletedKeys = Object.keys(oldFrontmatter).filter((k) => !(k in newFrontmatter))
+    const payload: Record<string, any> = { ...newFrontmatter }
+    if (deletedKeys.length > 0) payload._delete_keys = deletedKeys
+    setSelectedEntry({ ...selectedEntry, ...newFrontmatter })
+    updateMutation.mutate({ id: selectedEntry.id, data: payload })
   }
 
   if (isLoading) {
@@ -130,37 +192,30 @@ export default function StyleGuidePage({ projectId }: { projectId: string }) {
         </form>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 h-[calc(100vh-280px)]">
+      <div className="flex flex-col lg:flex-row gap-4 h-[calc(100vh-280px)]">
         {/* Entry list */}
-        <div className="lg:col-span-2 bg-card rounded-lg border p-4 overflow-auto">
-          <h2 className="text-sm font-semibold mb-3 text-muted-foreground uppercase tracking-wider">
-            Style
-          </h2>
-          <div className="space-y-1">
-            {entries && entries.length > 0 ? (
-              entries.map((entry) => (
-                <div
-                  key={entry.id}
-                  className={`flex items-center gap-1 p-2 rounded-md cursor-pointer hover:bg-accent ${
-                    selectedEntry?.id === entry.id ? 'bg-accent' : ''
-                  }`}
-                  onClick={() => setSelectedEntry(entry)}
-                >
-                  <Palette className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <span className="flex-1 text-sm truncate">{entry.title}</span>
-                  <span className="text-xs text-muted-foreground shrink-0">{entry.word_count}w</span>
-                </div>
-              ))
-            ) : (
-              <p className="text-sm text-muted-foreground text-center py-4">
-                No entries yet
-              </p>
-            )}
+        <ResizablePanel side="left" defaultWidth={220} storageKey="style_guide_left">
+          <div className="p-4 h-full overflow-auto">
+            <h2 className="text-sm font-semibold mb-3 text-muted-foreground uppercase tracking-wider">
+              Style
+            </h2>
+            <DraggableTreePanel
+              items={treeItems}
+              selectedId={selectedEntry?.id}
+              onSelect={(item) => setSelectedEntry(item as unknown as StyleGuideEntry)}
+              onReorder={(itemIds) => reorderMutation.mutate(itemIds)}
+              onNest={(itemId, parentId) => nestMutation.mutate({ id: itemId, parent_id: parentId })}
+              renderIcon={() => <Palette className="h-4 w-4 text-muted-foreground shrink-0" />}
+              renderBadge={(item) => (
+                <span className="text-xs text-muted-foreground shrink-0">{item.word_count}w</span>
+              )}
+              emptyMessage="No entries yet"
+            />
           </div>
-        </div>
+        </ResizablePanel>
 
         {/* Editor */}
-        <div className={`${sidebarCollapsed ? 'lg:col-span-10' : 'lg:col-span-7'} bg-card rounded-lg border flex flex-col overflow-hidden`}>
+        <div className="flex-1 min-w-0 bg-card rounded-lg border flex flex-col overflow-hidden">
           {selectedEntry ? (
             <div className="flex flex-col h-full">
               <div className="flex items-center justify-between p-3 border-b">
@@ -188,6 +243,20 @@ export default function StyleGuidePage({ projectId }: { projectId: string }) {
                   </button>
                 </div>
               </div>
+              <FrontmatterEditor
+                key={selectedEntry.id}
+                frontmatter={getFrontmatter(selectedEntry)}
+                systemFields={SG_SYSTEM_FIELDS}
+                existingKeys={existingFrontmatterKeys}
+                documents={(projectDocs || []).map((d) => ({ id: d.id, title: d.title }))}
+                onChange={handleFrontmatterChange}
+                onNavigateToDocument={(docId) => {
+                  const doc = projectDocs?.find((d) => d.id === docId)
+                  if (doc) {
+                    console.log('Navigate to document:', docId)
+                  }
+                }}
+              />
               <div className="flex-1 overflow-hidden">
                 <TipTapEditor
                   ref={editorRef}
@@ -196,10 +265,13 @@ export default function StyleGuidePage({ projectId }: { projectId: string }) {
                     setSelectedEntry({ ...selectedEntry, content })
                     updateMutation.mutate({ id: selectedEntry.id, data: { content } })
                   }}
-                  documents={(projectDocs || []).map((d) => ({ id: d.id, title: d.title }))}
+                  documents={(projectDocs || []).map((d) => ({ id: d.id, title: d.title, content: d.content }))}
                   tags={projectTags || []}
-                  onNavigateToDocument={(docId) => {
-                    console.log('Navigate to document:', docId)
+                  onNavigateToDocument={(docId, heading) => {
+                    const doc = projectDocs?.find((d) => d.id === docId)
+                    if (doc) {
+                      console.log('Navigate to document:', docId, heading)
+                    }
                   }}
                   onTagClick={(tag) => {
                     console.log('Tag clicked:', tag)
@@ -218,18 +290,19 @@ export default function StyleGuidePage({ projectId }: { projectId: string }) {
         </div>
 
         {/* AI Sidebar */}
-        <div className={`${sidebarCollapsed ? 'lg:col-span-1' : 'lg:col-span-3'} overflow-hidden rounded-lg border`}>
+        <ResizablePanel side="right" defaultWidth={320} storageKey="style_guide_right">
           <AIWritingSidebar
             getSelectedText={() => editorRef.current?.getSelectionInfo()?.text || ''}
             getFullContext={() => selectedEntry?.content || ''}
             onInsert={handleInsertText}
             projectId={projectId}
             currentDocumentId={selectedEntry?.id}
+            currentDocumentTitle={selectedEntry?.title}
             currentDocumentType="style_guide"
             currentFieldName="content"
-            onCollapseChange={setSidebarCollapsed}
+            moduleName="Style"
           />
-        </div>
+        </ResizablePanel>
       </div>
     </div>
   )

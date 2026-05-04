@@ -1,14 +1,17 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useMemo } from 'react'
 import type { TipTapEditorRef } from './TipTapEditor'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 import {
-  BookOpen, Plus, Trash2, Loader2, GripVertical,
+  BookOpen, Plus, Trash2, Loader2,
   Feather, ScrollText, BookMarked, Heart, MessageSquareQuote,
   Sparkles, Layers
 } from 'lucide-react'
+import DraggableTreePanel from '@/components/shared/DraggableTreePanel'
+import ResizablePanel from '@/components/shared/ResizablePanel'
 import TipTapEditor from './TipTapEditor'
 import AIWritingSidebar from '../writing/AIWritingSidebar'
+import FrontmatterEditor from './FrontmatterEditor'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useProjectTags } from '@/hooks/useProjectTags'
 
@@ -17,10 +20,15 @@ interface Document {
   title: string
   content: string
   doc_type: string
+  module: string
+  classification: string
   parent_id: string | null
   sort_order: number
   word_count: number
+  [key: string]: any
 }
+
+const DOC_SYSTEM_FIELDS = ['id', 'created_at', 'updated_at', 'project_id', 'word_count', 'content', 'doc_type', 'module', 'classification', 'parent_id', 'sort_order', 'title']
 
 const SECTION_TYPES = [
   { id: 'chapter', label: 'Chapter', icon: BookOpen },
@@ -44,10 +52,8 @@ export default function BookEditor({ projectId }: { projectId: string }) {
   const [showNewForm, setShowNewForm] = useState(false)
   const [newTitle, setNewTitle] = useState('')
   const [newDocType, setNewDocType] = useState('chapter')
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [newParentId, setNewParentId] = useState<string | null>(null)
   const editorRef = useRef<TipTapEditorRef>(null)
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
-  const dragIndexRef = useRef<number | null>(null)
   const queryClient = useQueryClient()
 
   const { data: documents, isLoading } = useQuery({
@@ -73,13 +79,28 @@ export default function BookEditor({ projectId }: { projectId: string }) {
       setShowNewForm(false)
       setNewTitle('')
       setNewDocType('chapter')
+      setNewParentId(null)
     },
   })
 
   const updateDocMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Partial<Document> }) =>
       api.put(`/documents/${id}`, data),
-    onSuccess: () => {
+    onMutate: async ({ id, data }) => {
+      await queryClient.cancelQueries({ queryKey: ['documents', projectId] })
+      const previousDocs = queryClient.getQueryData<Document[]>(['documents', projectId])
+      queryClient.setQueryData(['documents', projectId], (old: Document[] | undefined) => {
+        if (!old) return old
+        return old.map((doc) => (doc.id === id ? { ...doc, ...data } : doc))
+      })
+      return { previousDocs }
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previousDocs) {
+        queryClient.setQueryData(['documents', projectId], context.previousDocs)
+      }
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['documents', projectId] })
     },
   })
@@ -100,6 +121,14 @@ export default function BookEditor({ projectId }: { projectId: string }) {
     },
   })
 
+  const nestMutation = useMutation({
+    mutationFn: ({ id, parent_id }: { id: string; parent_id: string | null }) =>
+      api.put(`/documents/${id}`, { parent_id }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['documents', projectId] })
+    },
+  })
+
   const debouncedContent = useDebounce(selectedDoc?.content || '', 1000)
 
   // Auto-save when debounced content changes
@@ -115,15 +144,64 @@ export default function BookEditor({ projectId }: { projectId: string }) {
     createDocMutation.mutate({
       project_id: projectId,
       title: newTitle,
-      parent_id: null,
+      parent_id: newParentId,
       doc_type: newDocType,
     })
   }
+
+  // Build flat list of all documents for parent selector, with depth labels
+  const buildParentOptions = (docs: Document[], depth = 0, parentId: string | null = null): { id: string; label: string }[] => {
+    const children = docs.filter((d) => d.parent_id === parentId)
+    let options: { id: string; label: string }[] = []
+    if (depth === 0 && parentId === null) {
+      options.push({ id: '', label: '— None (root level) —' })
+    }
+    for (const child of children) {
+      options.push({ id: child.id, label: `${'  '.repeat(depth)}${child.title}` })
+      options = options.concat(buildParentOptions(docs, depth + 1, child.id))
+    }
+    return options
+  }
+
+  const parentOptions = buildParentOptions(documents || [])
 
   const handleDocContentChange = (content: string) => {
     if (selectedDoc) {
       setSelectedDoc({ ...selectedDoc, content })
     }
+  }
+
+  const getDocFrontmatter = (doc: Document): Record<string, any> => {
+    return Object.fromEntries(Object.entries(doc).filter(([k, v]) => {
+      if (DOC_SYSTEM_FIELDS.includes(k)) return false
+      if (v === null || v === undefined) return true
+      const t = typeof v
+      if (t === 'string' || t === 'number' || t === 'boolean') return true
+      if (Array.isArray(v)) return v.every((item) => typeof item !== 'object')
+      return false
+    }))
+  }
+
+  const existingFrontmatterKeys = useMemo(() => {
+    const keys = new Set<string>()
+    for (const doc of documents || []) {
+      for (const key of Object.keys(doc)) {
+        if (!DOC_SYSTEM_FIELDS.includes(key)) {
+          keys.add(key)
+        }
+      }
+    }
+    return Array.from(keys).sort()
+  }, [documents])
+
+  const handleFrontmatterChange = (newFrontmatter: Record<string, any>) => {
+    if (!selectedDoc) return
+    const oldFrontmatter = getDocFrontmatter(selectedDoc)
+    const deletedKeys = Object.keys(oldFrontmatter).filter((k) => !(k in newFrontmatter))
+    const payload: Record<string, any> = { ...newFrontmatter }
+    if (deletedKeys.length > 0) payload._delete_keys = deletedKeys
+    setSelectedDoc({ ...selectedDoc, ...newFrontmatter })
+    updateDocMutation.mutate({ id: selectedDoc.id, data: payload })
   }
 
   const handleInsertText = (text: string) => {
@@ -143,34 +221,6 @@ export default function BookEditor({ projectId }: { projectId: string }) {
     if (!selectedDoc || !editorRef.current) return
     editorRef.current.appendToEnd(text)
     editorRef.current.focus()
-  }
-
-  // Drag and drop handlers
-  const handleDragStart = (index: number) => {
-    dragIndexRef.current = index
-  }
-
-  const handleDragOver = (e: React.DragEvent, index: number) => {
-    e.preventDefault()
-    setDragOverIndex(index)
-  }
-
-  const handleDragLeave = () => {
-    setDragOverIndex(null)
-  }
-
-  const handleDrop = (e: React.DragEvent, dropIndex: number) => {
-    e.preventDefault()
-    setDragOverIndex(null)
-    const dragIndex = dragIndexRef.current
-    if (dragIndex === null || dragIndex === dropIndex) return
-
-    const reordered = [...sections]
-    const [moved] = reordered.splice(dragIndex, 1)
-    reordered.splice(dropIndex, 0, moved)
-
-    reorderMutation.mutate(reordered.map((d) => d.id))
-    dragIndexRef.current = null
   }
 
   if (isLoading) {
@@ -205,6 +255,16 @@ export default function BookEditor({ projectId }: { projectId: string }) {
                 <option key={s.id} value={s.id}>{s.label}</option>
               ))}
             </select>
+            <select
+              value={newParentId || ''}
+              onChange={(e) => setNewParentId(e.target.value || null)}
+              className="px-3 py-2 border rounded-md bg-background text-sm"
+              title="Parent section"
+            >
+              {parentOptions.map((opt) => (
+                <option key={opt.id} value={opt.id}>{opt.label}</option>
+              ))}
+            </select>
             <input
               value={newTitle}
               onChange={(e) => setNewTitle(e.target.value)}
@@ -223,47 +283,33 @@ export default function BookEditor({ projectId }: { projectId: string }) {
         </form>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 h-[calc(100vh-280px)]">
+      <div className="flex flex-col lg:flex-row gap-4 h-[calc(100vh-280px)]">
         {/* Section list */}
-        <div className="lg:col-span-2 bg-card rounded-lg border p-4 overflow-auto">
-          <h2 className="text-sm font-semibold mb-3 text-muted-foreground uppercase tracking-wider">
-            Sections
-          </h2>
-          <div className="space-y-1">
-            {sections.length > 0 ? (
-              sections.map((doc, index) => {
-                const sectionInfo = getSectionInfo(doc.doc_type)
-                const Icon = sectionInfo.icon
-                return (
-                  <div
-                    key={doc.id}
-                    draggable
-                    onDragStart={() => handleDragStart(index)}
-                    onDragOver={(e) => handleDragOver(e, index)}
-                    onDragLeave={handleDragLeave}
-                    onDrop={(e) => handleDrop(e, index)}
-                    className={`flex items-center gap-1 p-2 rounded-md cursor-pointer hover:bg-accent ${
-                      selectedDoc?.id === doc.id ? 'bg-accent ring-1 ring-primary' : ''
-                    } ${dragOverIndex === index ? 'border-t-2 border-primary' : ''}`}
-                    onClick={() => setSelectedDoc(doc)}
-                  >
-                    <GripVertical className="h-3 w-3 text-muted-foreground cursor-grab shrink-0" />
-                    <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
-                    <span className="flex-1 text-sm truncate">{doc.title}</span>
-                    <span className="text-xs text-muted-foreground shrink-0">{doc.word_count}w</span>
-                  </div>
-                )
-              })
-            ) : (
-              <p className="text-sm text-muted-foreground text-center py-4">
-                No sections yet
-              </p>
-            )}
+        <ResizablePanel side="left" defaultWidth={220} storageKey="book_editor_left">
+          <div className="p-4 h-full overflow-auto">
+            <h2 className="text-sm font-semibold mb-3 text-muted-foreground uppercase tracking-wider">
+              Sections
+            </h2>
+            <DraggableTreePanel
+              items={sections.map((d) => ({ ...d, title: d.title, parent_id: d.parent_id || null, sort_order: d.sort_order || 0 }))}
+              selectedId={selectedDoc?.id}
+              onSelect={(item) => setSelectedDoc(item as Document)}
+              onReorder={(ids) => reorderMutation.mutate(ids)}
+              onNest={(id, parentId) => nestMutation.mutate({ id, parent_id: parentId })}
+              renderIcon={(item) => {
+                const Icon = getSectionInfo(item.doc_type).icon
+                return <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
+              }}
+              renderBadge={(item) => (
+                <span className="text-xs text-muted-foreground shrink-0">{item.word_count}w</span>
+              )}
+              emptyMessage="No sections yet"
+            />
           </div>
-        </div>
+        </ResizablePanel>
 
         {/* Editor */}
-        <div className={`${sidebarCollapsed ? 'lg:col-span-10' : 'lg:col-span-7'} bg-card rounded-lg border flex flex-col overflow-hidden`}>
+        <div className="flex-1 min-w-0 bg-card rounded-lg border flex flex-col overflow-hidden">
           {selectedDoc ? (
             <div className="flex flex-col h-full">
               <div className="flex items-center justify-between p-3 border-b">
@@ -296,18 +342,58 @@ export default function BookEditor({ projectId }: { projectId: string }) {
                   </button>
                 </div>
               </div>
+              <FrontmatterEditor
+                key={selectedDoc.id}
+                frontmatter={getDocFrontmatter(selectedDoc)}
+                systemFields={DOC_SYSTEM_FIELDS}
+                existingKeys={existingFrontmatterKeys}
+                documents={(documents || []).map((d) => ({ id: d.id, title: d.title }))}
+                onChange={handleFrontmatterChange}
+                onNavigateToDocument={(docId, heading) => {
+                  const doc = sections.find((d) => d.id === docId)
+                  if (doc) {
+                    setSelectedDoc(doc)
+                    if (heading) {
+                      requestAnimationFrame(() => {
+                        const pm = document.querySelector('.ProseMirror')
+                        if (!pm) return
+                        const headings = pm.querySelectorAll('h1, h2, h3, h4, h5, h6')
+                        for (const h of headings) {
+                          if (h.textContent?.trim().toLowerCase() === heading.trim().toLowerCase()) {
+                            h.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                            break
+                          }
+                        }
+                      })
+                    }
+                  }
+                }}
+              />
               <div className="flex-1 overflow-hidden">
                 <TipTapEditor
                   key={selectedDoc.id}
                   ref={editorRef}
                   content={selectedDoc.content}
                   onChange={handleDocContentChange}
-                  documents={(documents || []).map((d) => ({ id: d.id, title: d.title }))}
+                  documents={(documents || []).map((d) => ({ id: d.id, title: d.title, content: d.content }))}
                   tags={projectTags || []}
-                  onNavigateToDocument={(docId) => {
+                  onNavigateToDocument={(docId, heading) => {
                     const doc = sections.find((d) => d.id === docId)
                     if (doc) {
                       setSelectedDoc(doc)
+                      if (heading) {
+                        requestAnimationFrame(() => {
+                          const pm = document.querySelector('.ProseMirror')
+                          if (!pm) return
+                          const headings = pm.querySelectorAll('h1, h2, h3, h4, h5, h6')
+                          for (const h of headings) {
+                            if (h.textContent?.trim().toLowerCase() === heading.trim().toLowerCase()) {
+                              h.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                              break
+                            }
+                          }
+                        })
+                      }
                     }
                   }}
                   onTagClick={(tag) => {
@@ -327,7 +413,7 @@ export default function BookEditor({ projectId }: { projectId: string }) {
         </div>
 
         {/* AI Sidebar */}
-        <div className={`${sidebarCollapsed ? 'lg:col-span-1' : 'lg:col-span-3'} overflow-hidden rounded-lg border`}>
+        <ResizablePanel side="right" defaultWidth={320} storageKey="book_editor_right">
           <AIWritingSidebar
             getSelectedText={() => editorRef.current?.getSelectionInfo()?.text || ''}
             getFullContext={() => selectedDoc?.content || ''}
@@ -338,9 +424,9 @@ export default function BookEditor({ projectId }: { projectId: string }) {
             currentDocumentTitle={selectedDoc?.title}
             currentDocumentType={selectedDoc?.doc_type}
             currentFieldName="content"
-            onCollapseChange={setSidebarCollapsed}
+            moduleName="Writing"
           />
-        </div>
+        </ResizablePanel>
       </div>
     </div>
   )

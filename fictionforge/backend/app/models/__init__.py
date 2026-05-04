@@ -7,6 +7,7 @@ from app.models.canvas import CanvasNode, CanvasEdge
 from app.models.story_engine import StoryOutline, StoryBeat
 from app.models.skill import Skill, SkillApplication
 from app.models.ai_provider import AIProviderConfig
+from app.models.ai_activity_log import AIActivityLog
 
 __all__ = [
     "User",
@@ -23,4 +24,5 @@ __all__ = [
     "Skill",
     "SkillApplication",
     "AIProviderConfig",
+    "AIActivityLog",
 ]

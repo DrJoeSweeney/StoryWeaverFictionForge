@@ -1,3 +1,5 @@
+import asyncio
+import time
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth.dependencies import get_current_active_user
 from app.models.user import User
@@ -5,6 +7,7 @@ from app.services.storage import get_storage
 from app.services.ai.agentic_orchestrator import AgenticOrchestrator
 from app.services.ai.base import Message
 from app.services.ai.manager import ai_manager, decrypt_credentials
+from app.services.ai.activity_logger import log_ai_activity
 from app.models.ai_provider import AIProviderConfig
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,7 +41,7 @@ async def get_skill(
     storage = get_storage()
     skill = await storage.get_skill(skill_id, current_user.id)
     if not skill:
-        raise HTTPException(status_code=404, detail="Skill not found")
+        raise HTTPException(status_code=404, detail="Agent not found")
     return skill
 
 
@@ -51,7 +54,7 @@ async def update_skill(
     storage = get_storage()
     skill = await storage.update_skill(skill_id, current_user.id, skill_data)
     if not skill:
-        raise HTTPException(status_code=404, detail="Skill not found")
+        raise HTTPException(status_code=404, detail="Agent not found")
     return skill
 
 
@@ -63,8 +66,8 @@ async def delete_skill(
     storage = get_storage()
     deleted = await storage.delete_skill(skill_id, current_user.id)
     if not deleted:
-        raise HTTPException(status_code=404, detail="Skill not found")
-    return {"message": "Skill deleted"}
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return {"message": "Agent deleted"}
 
 
 @router.post("/{skill_id}/apply")
@@ -76,7 +79,7 @@ async def apply_skill(
     storage = get_storage()
     skill = await storage.get_skill(skill_id, current_user.id)
     if not skill:
-        raise HTTPException(status_code=404, detail="Skill not found")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     import json
     from jinja2 import Template
@@ -171,7 +174,7 @@ async def execute_skill(
     storage = get_storage()
     skill = await storage.get_skill(skill_id, current_user.id)
     if not skill:
-        raise HTTPException(status_code=404, detail="Skill not found")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     import json
     from jinja2 import Template
@@ -236,6 +239,19 @@ async def execute_skill(
             reasoning_model=reasoning_model,
         )
 
+        # Build unified template context for the agentic pipeline
+        template_context = {
+            "text": rendered,
+            "fullContext": context.get("fullContext", ""),
+            "document_type": context.get("documentType") or context.get("document_type", ""),
+            "field_name": context.get("fieldName") or context.get("field_name", ""),
+            "document_title": context.get("document_title", ""),
+            "module": context.get("module", ""),
+            "title": context.get("title", ""),
+            "description": context.get("description", ""),
+        }
+
+        start_time = time.time()
         try:
             result = await orchestrator.run(
                 messages=modified_messages,
@@ -247,13 +263,51 @@ async def execute_skill(
                 action=skill.get("action") or None,
                 prompt_text=rendered,
                 reasoning_model=reasoning_model,
-                document_type=context.get("documentType") or context.get("document_type"),
-                field_name=context.get("fieldName") or context.get("field_name"),
+                template_context=template_context,
             )
+            latency_ms = int((time.time() - start_time) * 1000)
             result["skill"] = skill
             result["rendered_prompt"] = rendered
+            asyncio.create_task(log_ai_activity(
+                user_id=current_user.id,
+                project_id=project_id,
+                document_id=document_id,
+                request_type="agent",
+                action=skill.get("action"),
+                skill_id=skill_id,
+                skill_name=skill.get("name"),
+                prompt_text=rendered,
+                model=model,
+                provider=provider,
+                temperature=temperature,
+                tier=result.get("tier"),
+                reasoning_log=result.get("reasoning_log"),
+                consulted_docs=result.get("consulted_docs"),
+                context_length=len(extra_context) if extra_context else 0,
+                request_messages=messages_raw,
+                result_content=result.get("content"),
+                latency_ms=latency_ms,
+            ))
             return result
         except Exception as e:
+            latency_ms = int((time.time() - start_time) * 1000)
+            asyncio.create_task(log_ai_activity(
+                user_id=current_user.id,
+                project_id=project_id,
+                document_id=document_id,
+                request_type="agent",
+                action=skill.get("action"),
+                skill_id=skill_id,
+                skill_name=skill.get("name"),
+                prompt_text=rendered,
+                model=model,
+                provider=provider,
+                temperature=temperature,
+                context_length=len(extra_context) if extra_context else 0,
+                request_messages=messages_raw,
+                latency_ms=latency_ms,
+                error=str(e),
+            ))
             raise HTTPException(status_code=500, detail=str(e))
 
     # Non-agentic: just return the rendered prompt (client calls writing endpoint)
@@ -263,6 +317,6 @@ async def execute_skill(
         "variables": merged,
         "content": rendered,
         "reasoning_log": [],
-        "tier": "skill",
+        "tier": "agent",
         "consulted_docs": [],
     }

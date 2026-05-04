@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation } from '@tanstack/react-query'
 import api from '@/api/client'
-import { FileText, BookMarked, Users, Network, Loader2, Route, Download, BookOpen, Palette } from 'lucide-react'
+import { FileText, BookMarked, Users, Network, Loader2, Route, Download, BookOpen, Palette, RotateCcw, CheckCircle } from 'lucide-react'
 import DocumentEditor from '@/components/editor/DocumentEditor'
 import WorldPage from '@/components/world/WorldPage'
 import CharactersPage from '@/components/character/CharactersPage'
@@ -19,8 +19,8 @@ interface Project {
 }
 
 const TABS = [
-  { id: 'book', label: 'Book', icon: BookOpen },
-  { id: 'world', label: 'World', icon: BookMarked },
+  { id: 'writing', label: 'Writing', icon: BookOpen },
+  { id: 'world', label: 'Story Bible', icon: BookMarked },
   { id: 'characters', label: 'Characters', icon: Users },
   { id: 'story-engine', label: 'Story Plan', icon: Route },
   { id: 'documents', label: 'Notes', icon: FileText },
@@ -30,7 +30,19 @@ const TABS = [
 
 export default function ProjectDetailPage() {
   const { projectId } = useParams<{ projectId: string }>()
-  const [activeTab, setActiveTab] = useState('book')
+  const [activeTab, setActiveTab] = useState('writing')
+  const [rebuildSuccess, setRebuildSuccess] = useState(false)
+
+  const rebuildMutation = useMutation({
+    mutationFn: async () => {
+      const res = await api.post(`/embeddings/project/${projectId}/rebuild`)
+      return res.data
+    },
+    onSuccess: () => {
+      setRebuildSuccess(true)
+      setTimeout(() => setRebuildSuccess(false), 3000)
+    },
+  })
 
   const { data: project, isLoading } = useQuery({
     queryKey: ['project', projectId],
@@ -59,23 +71,40 @@ export default function ProjectDetailPage() {
             <p className="text-sm text-muted-foreground">{project.genre}</p>
           )}
         </div>
-        <button
-          onClick={async () => {
-            const res = await api.post(`/export/obsidian/${projectId}`, {}, { responseType: 'blob' })
-            const blob = new Blob([res.data], { type: 'application/zip' })
-            const url = URL.createObjectURL(blob)
-            const a = document.createElement('a')
-            a.href = url
-            const filename = res.headers['content-disposition']?.split('filename=')[1] || `${project?.title || 'project'}_obsidian_vault.zip`
-            a.download = filename.replace(/"/g, '')
-            a.click()
-            URL.revokeObjectURL(url)
-          }}
-          className="flex items-center gap-2 px-3 py-2 border rounded-md text-sm hover:bg-accent"
-        >
-          <Download className="h-4 w-4" />
-          Export to Obsidian
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => rebuildMutation.mutate()}
+            disabled={rebuildMutation.isPending}
+            className="flex items-center gap-2 px-3 py-2 border rounded-md text-sm hover:bg-accent disabled:opacity-50"
+            title="Rebuild semantic search index for this project"
+          >
+            {rebuildMutation.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : rebuildSuccess ? (
+              <CheckCircle className="h-4 w-4 text-green-500" />
+            ) : (
+              <RotateCcw className="h-4 w-4" />
+            )}
+            {rebuildMutation.isPending ? 'Indexing...' : rebuildSuccess ? 'Indexed!' : 'Rebuild Index'}
+          </button>
+          <button
+            onClick={async () => {
+              const res = await api.post(`/export/obsidian/${projectId}`, {}, { responseType: 'blob' })
+              const blob = new Blob([res.data], { type: 'application/zip' })
+              const url = URL.createObjectURL(blob)
+              const a = document.createElement('a')
+              a.href = url
+              const filename = res.headers['content-disposition']?.split('filename=')[1] || `${project?.title || 'project'}_obsidian_vault.zip`
+              a.download = filename.replace(/"/g, '')
+              a.click()
+              URL.revokeObjectURL(url)
+            }}
+            className="flex items-center gap-2 px-3 py-2 border rounded-md text-sm hover:bg-accent"
+          >
+            <Download className="h-4 w-4" />
+            Export to Obsidian
+          </button>
+        </div>
       </div>
 
       <div className="border-b">
@@ -101,7 +130,7 @@ export default function ProjectDetailPage() {
       </div>
 
       <div className="pt-2">
-        {activeTab === 'book' && <BookEditor projectId={projectId} />}
+        {activeTab === 'writing' && <BookEditor projectId={projectId} />}
         {activeTab === 'documents' && <DocumentEditor projectId={projectId} />}
         {activeTab === 'style-guide' && <StyleGuidePage projectId={projectId} />}
         {activeTab === 'world' && <WorldPage projectId={projectId} />}

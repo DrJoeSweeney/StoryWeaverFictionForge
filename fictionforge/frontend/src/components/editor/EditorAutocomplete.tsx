@@ -8,8 +8,18 @@ interface SuggestionItem {
 
 interface EditorAutocompleteProps {
   editor: Editor | null
-  documents: { id: string; title: string }[]
+  documents: { id: string; title: string; content?: string }[]
   tags: string[]
+}
+
+function extractHeadings(content: string): string[] {
+  const headings: string[] = []
+  const regex = /^#{1,6}\s+(.+)$/gm
+  let match
+  while ((match = regex.exec(content)) !== null) {
+    headings.push(match[1].trim())
+  }
+  return headings
 }
 
 export default function EditorAutocomplete({ editor, documents, tags }: EditorAutocompleteProps) {
@@ -17,7 +27,8 @@ export default function EditorAutocomplete({ editor, documents, tags }: EditorAu
   const [items, setItems] = useState<SuggestionItem[]>([])
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [position, setPosition] = useState({ top: 0, left: 0 })
-  const [mode, setMode] = useState<'link' | 'tag' | null>(null)
+  const [mode, setMode] = useState<'link' | 'heading' | 'tag' | null>(null)
+  const [headingDoc, setHeadingDoc] = useState<string | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
   const checkTrigger = useCallback(() => {
@@ -32,7 +43,30 @@ export default function EditorAutocomplete({ editor, documents, tags }: EditorAu
       return
     }
 
-    const textBefore = editor.state.doc.textBetween(Math.max(0, from - 50), from)
+    const textBefore = editor.state.doc.textBetween(Math.max(0, from - 80), from)
+
+    // Check for [[DocName#Heading trigger (heading link)
+    const headingMatch = textBefore.match(/\[\[([^\]|#]+)#([^\]]*)$/)
+    if (headingMatch) {
+      const docTitle = headingMatch[1].trim()
+      const q = headingMatch[2].toLowerCase()
+      const doc = documents.find((d) => d.title.trim().toLowerCase() === docTitle.toLowerCase())
+      if (doc?.content) {
+        const headings = extractHeadings(doc.content)
+          .filter((h) => h.toLowerCase().includes(q))
+          .map((h) => ({ id: h, label: h }))
+        if (headings.length > 0 || q.length === 0) {
+          setItems(headings.length > 0 ? headings : extractHeadings(doc.content).map((h) => ({ id: h, label: h })))
+          setMode('heading')
+          setHeadingDoc(doc.title)
+          setSelectedIndex(0)
+          setVisible(true)
+          const coords = editor.view.coordsAtPos(from)
+          setPosition({ top: coords.bottom + 4, left: coords.left })
+          return
+        }
+      }
+    }
 
     // Check for [[ trigger (link)
     const linkMatch = textBefore.match(/\[\[([^\]]*)$/)
@@ -44,6 +78,7 @@ export default function EditorAutocomplete({ editor, documents, tags }: EditorAu
       if (filtered.length > 0) {
         setItems(filtered)
         setMode('link')
+        setHeadingDoc(null)
         setSelectedIndex(0)
         setVisible(true)
         const coords = editor.view.coordsAtPos(from)
@@ -62,6 +97,7 @@ export default function EditorAutocomplete({ editor, documents, tags }: EditorAu
       if (filtered.length > 0 || q.length === 0) {
         setItems(filtered.length > 0 ? filtered : tags.map((t) => ({ id: t, label: t })))
         setMode('tag')
+        setHeadingDoc(null)
         setSelectedIndex(0)
         setVisible(true)
         const coords = editor.view.coordsAtPos(from)
@@ -88,24 +124,25 @@ export default function EditorAutocomplete({ editor, documents, tags }: EditorAu
   }, [editor, checkTrigger])
 
   const insertLink = useCallback(
-    (title: string) => {
+    (title: string, heading?: string) => {
       if (!editor || editor.isDestroyed) return
       const { from } = editor.state.selection
-      const textBefore = editor.state.doc.textBetween(Math.max(0, from - 50), from)
+      const textBefore = editor.state.doc.textBetween(Math.max(0, from - 80), from)
       const match = textBefore.match(/\[\[[^\]]*$/)
       if (!match) return
       const start = from - match[0].length
+      const linkText = heading ? `[[${title}#${heading}]]` : `[[${title}]]`
       editor
         .chain()
         .focus()
         .deleteRange({ from: start, to: from })
         .insertContentAt(start, {
           type: 'text',
-          text: `[[${title}]]`,
+          text: linkText,
           marks: [
             {
               type: 'internalLink',
-              attrs: { title },
+              attrs: { title, heading: heading || null },
             },
           ],
         })
@@ -146,9 +183,10 @@ export default function EditorAutocomplete({ editor, documents, tags }: EditorAu
   const handleSelect = useCallback(
     (item: SuggestionItem) => {
       if (mode === 'link') insertLink(item.label)
+      else if (mode === 'heading') insertLink(headingDoc || item.label, item.label)
       else if (mode === 'tag') insertTag(item.label)
     },
-    [mode, insertLink, insertTag]
+    [mode, headingDoc, insertLink, insertTag]
   )
 
   useEffect(() => {
@@ -193,7 +231,7 @@ export default function EditorAutocomplete({ editor, documents, tags }: EditorAu
       style={{ top: position.top, left: position.left }}
     >
       <div className="px-2 py-1 text-xs text-muted-foreground border-b mb-1">
-        {mode === 'link' ? 'Link to document' : 'Tag'}
+        {mode === 'link' ? 'Link to document' : mode === 'heading' ? `Headings in ${headingDoc}` : 'Tag'}
       </div>
       {items.map((item, index) => (
         <button

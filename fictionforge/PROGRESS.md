@@ -136,15 +136,13 @@ data/
 - [x] **Add Cancel button during document creation loop** ✅ — Cancel flag stops loop between documents
 
 ### Medium Priority
-- [ ] **Streaming AI responses** in chat sidebar (SSE via `/writing/stream`)
 - [ ] **Token limit guardrails** — Warn when chat context + prompt exceeds model context window
-- [ ] **Better document creation UX** — Show word count, estimated read time in plan preview
+- [x] **Better document creation UX** ✅ — Show word count, estimated read time in plan preview
 - [ ] **Import functionality** — Import existing Markdown/Word files into manuscript
 - [ ] **Version history / snapshots** — Save periodic snapshots of documents
 
 ### Low Priority / Polish
 - [ ] **Keyboard shortcuts** — `Ctrl+K` for AI sidebar focus, `Ctrl+Shift+A` for quick actions
-- [ ] **Mobile responsiveness** — Sidebar is unusable on small screens
 - [ ] **Offline mode** — Service worker to cache project data locally
 - [ ] **Collaboration** — WebSocket-based real-time editing
 - [ ] **Custom AI skills marketplace** — Share/import skill templates
@@ -194,4 +192,13 @@ cp -r dist/* ../backend/static/
 
 ---
 
-*Last updated: 2026-04-27*
+## 📝 Frontmatter Editor — Next Enhancements
+
+- [x] **Delete immediately on X click** ✅ — Remove frontmatter fields instantly; `removeField` optimistically updates local state + triggers mutation in one flow.
+- [x] **Native list/array support** ✅ — Frontmatter lists render as removable pills with inline add input; explicit type dropdown (Text/Number/Boolean/List) when creating or converting fields.
+- [x] **Autocomplete from existing frontmatter keys** ✅ — Scans all documents in the project; offers autocomplete dropdown when typing a new property name.
+- [x] **Document links in frontmatter values** ✅ — `[[Document Title]]` / `[[Doc#Heading|Display]]` syntax in string values renders as clickable internal links that navigate to the target document.
+
+---
+
+*Last updated: 2026-05-03*

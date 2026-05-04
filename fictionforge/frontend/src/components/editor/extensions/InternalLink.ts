@@ -1,7 +1,11 @@
 import { Mark, mergeAttributes } from '@tiptap/core'
 
 /**
- * TipTap Mark for internal wiki-style links: [[Document Name]]
+ * TipTap Mark for internal wiki-style links:
+ *   [[Document Name]]
+ *   [[Document Name|Display Text]]
+ *   [[Document Name#Heading]]
+ *   [[Document Name#Heading|Display Text]]
  *
  * Rendered as an <a> with class "internal-link". Clicking navigates
  * to the target document (handled by the editor shell).
@@ -33,6 +37,18 @@ export const InternalLink = Mark.create({
           element.getAttribute('data-title') || element.textContent || '',
         renderHTML: (attributes) =>
           attributes.title ? { 'data-title': attributes.title } : {},
+      },
+      heading: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('data-heading'),
+        renderHTML: (attributes) =>
+          attributes.heading ? { 'data-heading': attributes.heading } : {},
+      },
+      displayText: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('data-display'),
+        renderHTML: (attributes) =>
+          attributes.displayText ? { 'data-display': attributes.displayText } : {},
       },
     }
   },

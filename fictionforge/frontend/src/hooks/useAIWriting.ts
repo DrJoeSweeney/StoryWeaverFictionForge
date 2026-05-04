@@ -101,7 +101,6 @@ export function useAIWriting() {
   const [provider, setProvider] = useState(getSavedProvider)
   const [loading, setLoading] = useState(false)
   const [showSkills, setShowSkills] = useState(false)
-  const [includeStyleGuide, setIncludeStyleGuide] = useState(false)
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [pendingPlan, setPendingPlan] = useState<DocumentPlan | null>(null)
   const [creatingIndex, setCreatingIndex] = useState<number>(-1)
@@ -221,14 +220,17 @@ export function useAIWriting() {
       let prompt = custom.trim()
       if (selection) {
         prompt += `\n\nSelected text:\n${selection}`
-      }
-      if (context) {
-        prompt += `\n\nContext:\n${context}`
+      } else if (context) {
+        prompt += `\n\nCurrent document:\n${context}`
       }
       return prompt
     }
     if (act === 'continue') {
       return `Context:\n${context}\n\nContinue from here:`
+    }
+    if (!selection && context) {
+      // No selection but document exists — act on the whole document
+      return `Context:\n${context}\n\n${act.charAt(0).toUpperCase() + act.slice(1)} the text:`
     }
     return `Context:\n${context}\n\nSelected text to ${act}:\n${selection}`
   }
@@ -250,9 +252,6 @@ export function useAIWriting() {
     }
     if (projectId) {
       body.project_id = projectId
-      if (includeStyleGuide) {
-        body.include_style_guide = true
-      }
     }
     return body
   }
@@ -376,11 +375,14 @@ export function useAIWriting() {
     return null
   }
 
-  const generatePlan = useCallback(async (promptText: string, fullContext: string, projectId?: string): Promise<DocumentPlan | null> => {
+  const generatePlan = useCallback(async (promptText: string, fullContext: string, projectId?: string, documentType?: string): Promise<DocumentPlan | null> => {
     if (!model) return null
     setLoading(true)
     setIsAgentic(true)
     try {
+      const planContextHint = documentType === 'story_bible'
+        ? 'The user is currently working in the Story Bible module. When creating new entries, use doc_type values that match story bible categories: world, magic, history, culture, rules, locations, creatures, technology, politics, economics. Create story bible entries, not chapters or scenes.'
+        : ''
       const systemPrompt = getSkillSystemPrompt('plan', `You are a writing assistant helping an author plan new documents.
 
 If the user's request IS about creating new documents, chapters, scenes, notes, or pages, analyze their request and produce a structured plan.
@@ -388,7 +390,9 @@ If the user's request IS about creating new documents, chapters, scenes, notes, 
 Respond with a JSON object in this exact format (no markdown code blocks, no extra commentary):
 {"plan":"Brief description of the plan","documents":[{"title":"Title","description":"What this document will contain","doc_type":"chapter"}]}
 
-Use appropriate doc_type values: chapter, prologue, epilogue, note, scene, part, etc.
+Use appropriate doc_type values: chapter, prologue, epilogue, note, scene, part, world, magic, history, culture, rules, locations, creatures, technology, politics, economics, etc.
+
+${planContextHint}
 
 If the user's request is NOT about creating documents, just answer their question normally in plain text. Do not force JSON if they are asking a general question.`)
 
@@ -407,9 +411,6 @@ If the user's request is NOT about creating documents, just answer their questio
       }
       if (projectId) {
         body.project_id = projectId
-        if (includeStyleGuide) {
-          body.include_style_guide = true
-        }
       }
       const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
       const text = res.data.content
@@ -443,7 +444,7 @@ If the user's request is NOT about creating documents, just answer their questio
     } finally {
       setLoading(false)
     }
-  }, [model, provider, includeStyleGuide, chatMessages])
+  }, [model, provider, chatMessages])
 
   const regeneratePlan = useCallback(async (feedback: string, fullContext: string, projectId?: string) => {
     if (!model || !pendingPlan) return null
@@ -479,9 +480,6 @@ Use appropriate doc_type values: chapter, prologue, epilogue, note, scene, part,
       }
       if (projectId) {
         body.project_id = projectId
-        if (includeStyleGuide) {
-          body.include_style_guide = true
-        }
       }
       const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
       const text = res.data.content
@@ -514,7 +512,7 @@ Use appropriate doc_type values: chapter, prologue, epilogue, note, scene, part,
     } finally {
       setLoading(false)
     }
-  }, [model, provider, includeStyleGuide, chatMessages, pendingPlan])
+  }, [model, provider, chatMessages, pendingPlan])
 
   const generateOutlinePlan = useCallback(async (promptText: string, fullContext: string, projectId?: string) => {
     if (!model) return
@@ -553,9 +551,6 @@ Do NOT write the actual outline yet — just present the plan. Ask the user if t
       }
       if (projectId) {
         body.project_id = projectId
-        if (includeStyleGuide) {
-          body.include_style_guide = true
-        }
       }
       const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
       const text = res.data.content
@@ -586,7 +581,7 @@ Do NOT write the actual outline yet — just present the plan. Ask the user if t
     } finally {
       setLoading(false)
     }
-  }, [model, provider, includeStyleGuide, chatMessages])
+  }, [model, provider, chatMessages])
 
   const regenerateOutlinePlan = useCallback(async (feedback: string, fullContext: string, projectId?: string) => {
     if (!model || !pendingOutlinePlan) return
@@ -622,9 +617,6 @@ Present the revised plan clearly and ask if they approve or want further changes
       }
       if (projectId) {
         body.project_id = projectId
-        if (includeStyleGuide) {
-          body.include_style_guide = true
-        }
       }
       const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
       const text = res.data.content
@@ -654,7 +646,7 @@ Present the revised plan clearly and ask if they approve or want further changes
     } finally {
       setLoading(false)
     }
-  }, [model, provider, includeStyleGuide, chatMessages, pendingOutlinePlan])
+  }, [model, provider, chatMessages, pendingOutlinePlan])
 
   const generateOutlineContent = useCallback(async (fullContext: string, projectId?: string): Promise<string | null> => {
     if (!model || !pendingOutlinePlan) return null
@@ -686,9 +678,6 @@ Format the outline clearly using markdown headings and bullet points. Make it de
       }
       if (projectId) {
         body.project_id = projectId
-        if (includeStyleGuide) {
-          body.include_style_guide = true
-        }
       }
       const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
       const text = res.data.content
@@ -713,7 +702,7 @@ Format the outline clearly using markdown headings and bullet points. Make it de
     } finally {
       setLoading(false)
     }
-  }, [model, provider, includeStyleGuide, chatMessages, pendingOutlinePlan])
+  }, [model, provider, chatMessages, pendingOutlinePlan])
 
   const parseOutline = useCallback(async (fullContext: string, projectId?: string): Promise<Array<{ title: string; description: string }>> => {
     if (!model) return []
@@ -737,9 +726,6 @@ Do not include any markdown formatting, commentary, or explanation — just the 
       }
       if (projectId) {
         body.project_id = projectId
-        if (includeStyleGuide) {
-          body.include_style_guide = true
-        }
       }
       const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
       const text = res.data.content
@@ -754,7 +740,7 @@ Do not include any markdown formatting, commentary, or explanation — just the 
     } catch {
       return []
     }
-  }, [model, provider, includeStyleGuide])
+  }, [model, provider])
 
   const writeOutlineSection = useCallback(async (
     section: { title: string; description: string },
@@ -798,13 +784,10 @@ Write the full prose for this section only.`
     }
     if (projectId) {
       body.project_id = projectId
-      if (includeStyleGuide) {
-        body.include_style_guide = true
-      }
     }
     const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
     return res.data.content
-  }, [model, provider, includeStyleGuide])
+  }, [model, provider])
 
   const writeOutlineToText = useCallback(async (fullContext: string, projectId?: string, onAppend?: (text: string) => void) => {
     if (!model) return
@@ -868,7 +851,7 @@ Write the full prose for this section only.`
     } finally {
       setLoading(false)
     }
-  }, [model, provider, includeStyleGuide, parseOutline, writeOutlineSection])
+  }, [model, provider, parseOutline, writeOutlineSection])
 
   const initiateWriteOutline = useCallback(async () => {
     setPendingPlan(null)
@@ -900,11 +883,18 @@ Write the full prose for this section only.`
       return
     }
 
+    // If no document context is available, assume the user wants to create a new document
+    if (!fullContext.trim() && !selectedText.trim()) {
+      await generatePlan(promptText, '', projectId)
+      setCustomPrompt('')
+      return
+    }
+
     setLoading(true)
     setIsAgentic(false)
     try {
       const systemPrompt = getSystemPrompt(action)
-      const userPrompt = buildUserPrompt(action, selectedText || fullContext.slice(-500), fullContext, promptText)
+      const userPrompt = buildUserPrompt(action, selectedText, fullContext, promptText)
       const messages = buildApiMessages(systemPrompt, userPrompt)
       const body = buildBody(messages, projectId)
       const res = await api.post('/writing/complete', body, { timeout: 300000 })
@@ -917,13 +907,13 @@ Write the full prose for this section only.`
     } catch (err: any) {
       setChatMessages(prev => [
         ...prev,
-        { role: 'user', content: buildUserPrompt(action, selectedText || fullContext.slice(-500), fullContext, promptText) },
+        { role: 'user', content: buildUserPrompt(action, selectedText, fullContext, promptText) },
         { role: 'assistant', content: `Error: ${err.response?.data?.detail || err.message}` },
       ])
     } finally {
       setLoading(false)
     }
-  }, [action, model, provider, includeStyleGuide, customPrompt, chatMessages, clearChat, generatePlan, regeneratePlan, pendingPlan])
+  }, [action, model, provider, customPrompt, chatMessages, clearChat, generatePlan, regeneratePlan, pendingPlan])
 
   const getReasoningModelPrefs = () => {
     const saved = typeof window !== 'undefined' ? localStorage.getItem('fictionforge-reasoning-model') : ''
@@ -934,7 +924,7 @@ Write the full prose for this section only.`
     return {}
   }
 
-  const agenticGenerate = useCallback(async (selectedText: string, fullContext: string, projectId?: string) => {
+  const agenticGenerate = useCallback(async (selectedText: string, fullContext: string, projectId?: string, documentType?: string) => {
     if (!model) return
     const promptText = customPrompt.trim()
     const lowerPrompt = promptText.toLowerCase()
@@ -1000,7 +990,14 @@ Write the full prose for this section only.`
 
     // Detect if this looks like a document creation request
     if (detectPlanMode(promptText) || lowerPrompt.startsWith('/plan') || lowerPrompt.startsWith('/create')) {
-      await generatePlan(promptText, fullContext, projectId)
+      await generatePlan(promptText, fullContext, projectId, documentType)
+      setCustomPrompt('')
+      return
+    }
+
+    // If no document context is available, assume the user wants to create a new document
+    if (!fullContext.trim() && !selectedText.trim()) {
+      await generatePlan(promptText, '', projectId, documentType)
       setCustomPrompt('')
       return
     }
@@ -1012,7 +1009,7 @@ Write the full prose for this section only.`
     setConsultedDocs([])
     try {
       const systemPrompt = getSystemPrompt(action)
-      const userPrompt = buildUserPrompt(action, selectedText || fullContext.slice(-500), fullContext, promptText)
+      const userPrompt = buildUserPrompt(action, selectedText, fullContext, promptText)
       const messages = buildApiMessages(systemPrompt, userPrompt)
       const body: any = {
         messages,
@@ -1025,9 +1022,6 @@ Write the full prose for this section only.`
       }
       if (projectId) {
         body.project_id = projectId
-        if (includeStyleGuide) {
-          body.include_style_guide = true
-        }
       }
       const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
       const { content, reasoning_log, tier, consulted_docs } = res.data
@@ -1042,13 +1036,13 @@ Write the full prose for this section only.`
     } catch (err: any) {
       setChatMessages((prev) => [
         ...prev,
-        { role: 'user', content: buildUserPrompt(action, selectedText || fullContext.slice(-500), fullContext, promptText) },
+        { role: 'user', content: buildUserPrompt(action, selectedText, fullContext, promptText) },
         { role: 'assistant', content: `Error: ${err.response?.data?.detail || err.message}` },
       ])
     } finally {
       setLoading(false)
     }
-  }, [action, model, provider, includeStyleGuide, customPrompt, chatMessages, clearChat, generatePlan, interactionMode, pendingOutlinePlan, pendingPlan, generateOutlinePlan, regenerateOutlinePlan, generateOutlineContent, initiateWriteOutline])
+  }, [action, model, provider, customPrompt, chatMessages, clearChat, generatePlan, interactionMode, pendingOutlinePlan, pendingPlan, generateOutlinePlan, regenerateOutlinePlan, generateOutlineContent, initiateWriteOutline])
 
   const generateDocumentContent = useCallback(async (doc: DocumentPlanItem, fullContext: string, projectId?: string): Promise<string> => {
     if (!model) throw new Error('No model selected')
@@ -1082,9 +1076,6 @@ Write the full text as it would appear in the final document. Do not include met
     }
     if (projectId) {
       body.project_id = projectId
-      if (includeStyleGuide) {
-        body.include_style_guide = true
-      }
     }
     try {
       const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
@@ -1094,9 +1085,9 @@ Write the full text as it would appear in the final document. Do not include met
       console.error('[AI] Content generation failed:', err.message, err.response?.data)
       throw err
     }
-  }, [model, provider, includeStyleGuide])
+  }, [model, provider])
 
-  const executeSkill = useCallback(async (skillId: string, selectedText: string, fullContext: string, projectId?: string, documentType?: string, fieldName?: string): Promise<string> => {
+  const executeSkill = useCallback(async (skillId: string, selectedText: string, fullContext: string, projectId?: string, documentType?: string, fieldName?: string, documentTitle?: string, module?: string): Promise<string> => {
     if (!model) throw new Error('No model selected')
     setLoading(true)
     setIsAgentic(true)
@@ -1109,7 +1100,7 @@ Write the full text as it would appear in the final document. Do not include met
           { role: 'system', content: '' },
           { role: 'user', content: selectedText || fullContext.slice(-500) },
         ],
-        context: { text: selectedText, fullContext, documentType, fieldName },
+        context: { text: selectedText, fullContext, documentType, fieldName, document_title: documentTitle || '', module: module || '' },
         provider: provider || undefined,
         model: model || undefined,
         project_id: projectId || undefined,
@@ -1124,7 +1115,7 @@ Write the full text as it would appear in the final document. Do not include met
       setConsultedDocs(consulted_docs || [])
       setChatMessages((prev) => [
         ...prev,
-        { role: 'user', content: `[Skill: ${skillId}] ${selectedText || fullContext.slice(-200)}` },
+        { role: 'user', content: `[Agent: ${skillId}] ${selectedText || fullContext.slice(-200)}` },
         { role: 'assistant', content: content },
       ])
       return content
@@ -1132,14 +1123,14 @@ Write the full text as it would appear in the final document. Do not include met
       const msg = `Error: ${err.response?.data?.detail || err.message}`
       setChatMessages((prev) => [
         ...prev,
-        { role: 'user', content: `[Skill: ${skillId}] ${selectedText || fullContext.slice(-200)}` },
+        { role: 'user', content: `[Agent: ${skillId}] ${selectedText || fullContext.slice(-200)}` },
         { role: 'assistant', content: msg },
       ])
       throw err
     } finally {
       setLoading(false)
     }
-  }, [model, provider, includeStyleGuide, chatMessages])
+  }, [model, provider, chatMessages])
 
   const execute = useCallback(async (act: string, selectedText: string, fullContext: string, projectId?: string): Promise<string> => {
     if (!model) throw new Error('No model selected')
@@ -1155,7 +1146,7 @@ Write the full text as it would appear in the final document. Do not include met
       { role: 'assistant', content: assistantContent },
     ])
     return assistantContent
-  }, [model, provider, includeStyleGuide, chatMessages])
+  }, [model, provider, chatMessages])
 
   const agenticExecute = useCallback(async (act: string, selectedText: string, fullContext: string, projectId?: string, documentType?: string, fieldName?: string): Promise<string> => {
     if (!model) throw new Error('No model selected')
@@ -1179,9 +1170,6 @@ Write the full text as it would appear in the final document. Do not include met
     }
     if (projectId) {
       body.project_id = projectId
-      if (includeStyleGuide) {
-        body.include_style_guide = true
-      }
     }
     const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
     const { content, reasoning_log, tier, consulted_docs } = res.data
@@ -1194,7 +1182,7 @@ Write the full text as it would appear in the final document. Do not include met
       { role: 'assistant', content: content },
     ])
     return content
-  }, [model, provider, includeStyleGuide, chatMessages])
+  }, [model, provider, chatMessages])
 
   const generateToClipboard = useCallback(async (selectedText: string, fullContext: string, projectId?: string): Promise<string> => {
     if (!model) return ''
@@ -1202,7 +1190,7 @@ Write the full text as it would appear in the final document. Do not include met
     setIsAgentic(false)
     try {
       const systemPrompt = getSystemPrompt(action)
-      const userPrompt = buildUserPrompt(action, selectedText || fullContext.slice(-500), fullContext, customPrompt)
+      const userPrompt = buildUserPrompt(action, selectedText, fullContext, customPrompt)
       const messages = buildApiMessages(systemPrompt, userPrompt)
       const body = buildBody(messages, projectId)
       const res = await api.post('/writing/complete', body, { timeout: 300000 })
@@ -1218,16 +1206,16 @@ Write the full text as it would appear in the final document. Do not include met
       const msg = `Error: ${err.response?.data?.detail || err.message}`
       setChatMessages(prev => [
         ...prev,
-        { role: 'user', content: buildUserPrompt(action, selectedText || fullContext.slice(-500), fullContext, customPrompt) },
+        { role: 'user', content: buildUserPrompt(action, selectedText, fullContext, customPrompt) },
         { role: 'assistant', content: msg },
       ])
       return ''
     } finally {
       setLoading(false)
     }
-  }, [action, model, provider, includeStyleGuide, customPrompt, chatMessages])
+  }, [action, model, provider, customPrompt, chatMessages])
 
-  const applySkill = useCallback(async (skillId: string, selectedText: string, fullContext: string, projectId?: string) => {
+  const applySkill = useCallback(async (skillId: string, selectedText: string, fullContext: string, projectId?: string, documentTitle?: string, module?: string) => {
     if (!model) return
     setLoading(true)
     setIsAgentic(true)
@@ -1236,7 +1224,7 @@ Write the full text as it would appear in the final document. Do not include met
     setConsultedDocs([])
     try {
       const applyRes = await api.post(`/skills/${skillId}/apply`, {
-        context: { text: selectedText || fullContext, selected_text: selectedText },
+        context: { text: selectedText || fullContext, selected_text: selectedText, document_title: documentTitle || '', module: module || '' },
       })
       const rendered = applyRes.data.rendered_prompt
       const systemPrompt = 'You are a creative writing assistant. ' + getLanguageInstruction()
@@ -1247,14 +1235,11 @@ Write the full text as it would appear in the final document. Do not include met
         model: model || undefined,
         temperature: 0.8,
         action: 'skill',
-        prompt: `[Skill: ${skillId}]`,
+        prompt: `[Agent: ${skillId}]`,
         ...getReasoningModelPrefs(),
       }
       if (projectId) {
         body.project_id = projectId
-        if (includeStyleGuide) {
-          body.include_style_guide = true
-        }
       }
       const res = await api.post<AgenticResponse>('/writing/agentic', body, { timeout: 300000 })
       const { content, reasoning_log, tier, consulted_docs } = res.data
@@ -1263,19 +1248,19 @@ Write the full text as it would appear in the final document. Do not include met
       setConsultedDocs(consulted_docs || [])
       setChatMessages(prev => [
         ...prev,
-        { role: 'user', content: `[Skill: ${skillId}]` },
+        { role: 'user', content: `[Agent: ${skillId}]` },
         { role: 'assistant', content: content },
       ])
     } catch (err: any) {
       setChatMessages(prev => [
         ...prev,
-        { role: 'user', content: `[Skill: ${skillId}]` },
+        { role: 'user', content: `[Agent: ${skillId}]` },
         { role: 'assistant', content: `Error: ${err.response?.data?.detail || err.message}` },
       ])
     } finally {
       setLoading(false)
     }
-  }, [model, provider, includeStyleGuide, chatMessages])
+  }, [model, provider, chatMessages])
 
   return {
     action,
@@ -1290,8 +1275,6 @@ Write the full text as it would appear in the final document. Do not include met
     setLoading,
     showSkills,
     setShowSkills,
-    includeStyleGuide,
-    setIncludeStyleGuide,
     chatMessages,
     setChatMessages,
     clearChat,

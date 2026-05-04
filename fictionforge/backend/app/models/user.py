@@ -19,6 +19,7 @@ class User(Base):
     projects = relationship("Project", back_populates="user", cascade="all, delete-orphan")
     skills = relationship("Skill", back_populates="user", cascade="all, delete-orphan")
     ai_provider_configs = relationship("AIProviderConfig", back_populates="user", cascade="all, delete-orphan")
+    ai_activity_logs = relationship("AIActivityLog", back_populates="user", cascade="all, delete-orphan")
 
 
 class OAuthAccount(Base):
