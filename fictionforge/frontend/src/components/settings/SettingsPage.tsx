@@ -4,7 +4,7 @@ import api from '@/api/client'
 import { useUISettings } from '@/hooks/useUISettings'
 import { useModelPreferences } from '@/hooks/useModelPreferences'
 import {
-  Key, Trash2, Plus, Bot, TestTube, CheckCircle, XCircle, Sun, Moon, Monitor, Type, Heading, Loader, List, Brain, RefreshCw, Globe, Eye, Code, ScrollText, Feather, Music, Image, EyeOff, Star, AlertTriangle
+  Key, Trash2, Plus, Bot, TestTube, CheckCircle, XCircle, Sun, Moon, Monitor, Type, Heading, Loader, List, Brain, RefreshCw, Globe, Eye, Code, ScrollText, Feather, Music, Image, EyeOff, Star, AlertTriangle, FileDown, Clock
 } from 'lucide-react'
 
 interface AIConfig {
@@ -113,6 +113,7 @@ export default function SettingsPage() {
     }
     return ''
   })
+  const [showLogs, setShowLogs] = useState(false)
   const queryClient = useQueryClient()
 
   useEffect(() => {
@@ -196,7 +197,7 @@ export default function SettingsPage() {
       <div>
         <h1 className="text-2xl font-bold flex items-center gap-2">
           <Bot className="h-6 w-6" />
-          Settings
+          Configuration
         </h1>
       </div>
 
@@ -646,6 +647,9 @@ export default function SettingsPage() {
           </p>
         )}
       </div>
+
+      {/* AI Activity Log */}
+      <AIActivityLogSection showLogs={showLogs} setShowLogs={setShowLogs} />
     </div>
   )
 }
@@ -664,5 +668,205 @@ function FilterToggle({ active, onToggle, icon, label }: { active: boolean; onTo
       {icon}
       <span>{label}</span>
     </button>
+  )
+}
+
+interface AIActivityLog {
+  id: string
+  created_at: string
+  request_type: string
+  action: string | null
+  skill_name: string | null
+  model: string | null
+  provider: string | null
+  tier: string | null
+  latency_ms: number | null
+  error: string | null
+  prompt_text: string | null
+  result_content: string | null
+}
+
+function AIActivityLogSection({ showLogs, setShowLogs }: { showLogs: boolean; setShowLogs: (v: boolean) => void }) {
+  const queryClient = useQueryClient()
+  const [showConfirm, setShowConfirm] = useState(false)
+
+  const { data: logs, isLoading, refetch } = useQuery({
+    queryKey: ['ai-activity-logs'],
+    queryFn: async () => {
+      const res = await api.get<AIActivityLog[]>('/ai-activity-logs?limit=200')
+      return res.data
+    },
+    enabled: showLogs,
+    staleTime: 0,
+    refetchOnMount: 'always',
+  })
+
+  const clearMutation = useMutation({
+    mutationFn: () => api.delete('/ai-activity-logs'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['ai-activity-logs'] })
+      setShowConfirm(false)
+    },
+  })
+
+  const handleExport = async () => {
+    try {
+      const res = await api.get('/ai-activity-logs/export/csv', {
+        responseType: 'blob',
+      })
+      const blob = new Blob([res.data], { type: 'text/csv' })
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `ai_activity_logs_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.csv`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (e: any) {
+      alert(e.response?.data?.detail || 'Export failed')
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold flex items-center gap-2">
+          <ScrollText className="h-5 w-5" />
+          AI Activity Log
+        </h2>
+        <div className="flex items-center gap-2">
+          {showLogs && (
+            <>
+              <button
+                onClick={() => refetch()}
+                className="flex items-center gap-1 px-2 py-2 border rounded-md text-sm hover:bg-accent text-muted-foreground"
+                title="Refresh logs"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={() => setShowConfirm(true)}
+                disabled={clearMutation.isPending || !logs?.length}
+                className="flex items-center gap-1 px-2 py-2 border rounded-md text-sm hover:bg-destructive/10 hover:text-destructive text-muted-foreground disabled:opacity-50"
+                title="Clear all logs"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </>
+          )}
+          <button
+            onClick={handleExport}
+            className="flex items-center gap-2 px-3 py-2 bg-primary text-primary-foreground rounded-md text-sm"
+            title="Export all logs as CSV"
+          >
+            <FileDown className="h-4 w-4" />
+            Export CSV
+          </button>
+          <button
+            onClick={() => setShowLogs(!showLogs)}
+            className="flex items-center gap-2 px-3 py-2 border rounded-md text-sm hover:bg-accent"
+          >
+            {showLogs ? 'Hide Logs' : 'View Logs'}
+          </button>
+        </div>
+      </div>
+
+      {showConfirm && (
+        <div className="bg-destructive/5 border border-destructive/20 rounded-lg p-4 space-y-3">
+          <p className="text-sm text-destructive">
+            Are you sure you want to delete all AI activity logs for your account? This cannot be undone.
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => clearMutation.mutate()}
+              disabled={clearMutation.isPending}
+              className="px-3 py-1.5 bg-destructive text-destructive-foreground rounded-md text-sm disabled:opacity-50"
+            >
+              {clearMutation.isPending ? 'Clearing...' : 'Yes, Clear All'}
+            </button>
+            <button
+              onClick={() => setShowConfirm(false)}
+              disabled={clearMutation.isPending}
+              className="px-3 py-1.5 border rounded-md text-sm hover:bg-accent"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showLogs && (
+        <div className="bg-card rounded-lg border overflow-hidden">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-8 gap-2 text-muted-foreground">
+              <Loader className="h-4 w-4 animate-spin" />
+              <span className="text-sm">Loading logs...</span>
+            </div>
+          ) : logs && logs.length > 0 ? (
+            <div className="max-h-[500px] overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-background border-b">
+                  <tr>
+                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Time</th>
+                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Type</th>
+                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Action / Agent</th>
+                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Model</th>
+                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Tier</th>
+                    <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Latency</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {logs.map((log) => (
+                    <tr key={log.id} className="hover:bg-accent/50">
+                      <td className="px-3 py-2 whitespace-nowrap text-xs text-muted-foreground">
+                        <div className="flex items-center gap-1">
+                          <Clock className="h-3 w-3" />
+                          {new Date(log.created_at).toLocaleString()}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full uppercase tracking-wider ${
+                          log.request_type === 'agentic' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' :
+                          log.request_type === 'agent' || log.request_type === 'skill' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' :
+                          'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                        }`}>
+                          {log.request_type}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 max-w-[200px] truncate" title={log.action || log.skill_name || ''}>
+                        {log.skill_name || log.action || '-'}
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap text-xs text-muted-foreground">
+                        {log.model ? `${log.model}` : '-'}
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        {log.tier ? (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-secondary text-muted-foreground uppercase">
+                            {log.tier}
+                          </span>
+                        ) : '-'}
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap text-right text-xs text-muted-foreground">
+                        {log.latency_ms ? `${log.latency_ms}ms` : '-'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="text-center py-8 space-y-2">
+              <p className="text-sm text-muted-foreground">
+                No AI activity logs yet for your account.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Logs are created automatically when you use the AI Assistant (Continue, Rewrite, Agents, etc.).
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   )
 }

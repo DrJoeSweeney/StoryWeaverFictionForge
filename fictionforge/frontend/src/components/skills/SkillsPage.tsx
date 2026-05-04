@@ -1,11 +1,16 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 import {
   Plus, Wand2, Trash2, Copy, Lock, Unlock,
-  ChevronLeft, Loader2, Zap, ArrowRight, Type, Feather,
-  BookOpen, Check, RefreshCw, Sparkles
+  Loader2, Zap, ArrowRight, Type, Feather,
+  BookOpen, Check, RefreshCw, Sparkles, ScrollText,
+  Pen, Pencil, Highlighter, Search, Globe, Brain, Eye,
+  MessageSquare, List, ListOrdered, FileText, Heart,
+  Star, Flame, Moon, Sun, Cloud, TreePine, Mountain,
+  Anchor, Sword, Shield, Crown, Gem, Key, Braces
 } from 'lucide-react'
+import ResizablePanel from '@/components/shared/ResizablePanel'
 
 interface Skill {
   id: string
@@ -73,7 +78,7 @@ const AVAILABLE_ICONS = [
 const CONTEXT_SOURCE_OPTIONS = [
   { id: 'style_guide', label: 'Style Guide' },
   { id: 'characters', label: 'Characters' },
-  { id: 'story_bible', label: 'World / Story Bible' },
+  { id: 'story_bible', label: 'Story Bible' },
   { id: 'outlines', label: 'Outlines / Story Plan' },
   { id: 'documents', label: 'Documents / Chapters' },
 ]
@@ -100,13 +105,10 @@ function UserIcon(props: any) {
 
 const QUICK_ACTION_ICON_MAP: Record<string, React.ElementType> = {
   ArrowRight, RefreshCw, Type, Zap, Sparkles, Feather, BookOpen,
-  ScrollText: BookOpen, Wand2, Pen: Feather, Pencil: Feather,
-  Search: BookOpen, Globe: BookOpen, Brain: BookOpen, Eye: BookOpen,
-  MessageSquare: BookOpen, List: BookOpen, ListOrdered: BookOpen,
-  FileText: BookOpen, Heart: BookOpen, Star: BookOpen, Flame: BookOpen,
-  Moon: BookOpen, Sun: BookOpen, Cloud: BookOpen, TreePine: BookOpen,
-  Mountain: BookOpen, Anchor: BookOpen, Sword: BookOpen, Shield: BookOpen,
-  Crown: BookOpen, Gem: BookOpen, Key: BookOpen, Lock, Unlock,
+  ScrollText, Wand2, Pen, Pencil, Highlighter, Search, Globe,
+  Brain, Eye, MessageSquare, List, ListOrdered, FileText, Heart,
+  Star, Flame, Moon, Sun, Cloud, TreePine, Mountain, Anchor,
+  Sword, Shield, Crown, Gem, Key, Lock, Unlock,
 }
 
 function QuickActionIcon({ name, className }: { name: string; className?: string }) {
@@ -114,11 +116,58 @@ function QuickActionIcon({ name, className }: { name: string; className?: string
   return <Icon className={className} />
 }
 
+const AVAILABLE_VARIABLES = [
+  { name: '{{text}}', desc: 'Selected text or user input' },
+  { name: '{{fullContext}}', desc: 'Full project context (documents, characters, story bible, etc.)' },
+  { name: '{{title}}', desc: 'Project title' },
+  { name: '{{description}}', desc: 'Project description' },
+  { name: '{{documentType}}', desc: 'Current document type (e.g., chapter, story_bible)' },
+  { name: '{{fieldName}}', desc: 'Current field name being edited' },
+  { name: '{{document_title}}', desc: 'Title/name of the currently selected document (blank if nothing selected)' },
+  { name: '{{module}}', desc: 'Name of the module the AI is being called from (e.g., Writing, Story Bible, Characters, Story Plan, Notes, Style)' },
+]
+
+function VariableTipButton({ onInsert }: { onInsert: (variable: string) => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="relative inline-block">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex items-center justify-center w-7 h-7 rounded-md hover:bg-accent text-muted-foreground border border-transparent hover:border-border transition-colors"
+        title="Insert variable"
+      >
+        <Braces className="h-3.5 w-3.5" />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute z-20 right-0 mt-1 w-64 bg-card border rounded-lg shadow-lg py-1">
+            <div className="px-3 py-1.5 text-xs font-medium text-muted-foreground border-b">
+              Available Variables
+            </div>
+            {AVAILABLE_VARIABLES.map((v) => (
+              <button
+                key={v.name}
+                type="button"
+                onClick={() => { onInsert(v.name); setOpen(false) }}
+                className="w-full text-left px-3 py-1.5 text-xs hover:bg-accent flex flex-col"
+              >
+                <code className="font-mono text-primary">{v.name}</code>
+                <span className="text-muted-foreground">{v.desc}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 export default function SkillsPage() {
   const [showForm, setShowForm] = useState(false)
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null)
   const [editingOverride, setEditingOverride] = useState(false)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [testInput, setTestInput] = useState('')
   const [testResult, setTestResult] = useState('')
   const [testLoading, setTestLoading] = useState(false)
@@ -132,6 +181,30 @@ export default function SkillsPage() {
     is_quick_action: false, icon: '',
     temperature: 0.8, model: ''
   })
+
+  const createSystemRef = useRef<HTMLTextAreaElement>(null)
+  const createPromptRef = useRef<HTMLTextAreaElement>(null)
+
+  const insertIntoFormField = (field: 'system_prompt' | 'prompt_template', text: string) => {
+    const ref = field === 'system_prompt' ? createSystemRef : createPromptRef
+    const el = ref.current
+    if (!el) {
+      setFormData((prev) => ({
+        ...prev,
+        [field]: (prev[field] || '') + text
+      }))
+      return
+    }
+    const prev = formData[field] || ''
+    const start = el.selectionStart ?? prev.length
+    const next = prev.slice(0, start) + text + prev.slice(el.selectionEnd ?? start)
+    setFormData((f) => ({ ...f, [field]: next }))
+    requestAnimationFrame(() => {
+      const pos = start + text.length
+      el.setSelectionRange(pos, pos)
+      el.focus()
+    })
+  }
 
   const { data: skills, isLoading } = useQuery({
     queryKey: ['skills'],
@@ -263,7 +336,7 @@ export default function SkillsPage() {
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <Wand2 className="h-6 w-6" />
-            Skills
+            Agents
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
             Define reusable agentic prompts, context sources, and workflows
@@ -274,7 +347,7 @@ export default function SkillsPage() {
           className="flex items-center gap-2 px-3 py-2 bg-primary text-primary-foreground rounded-md text-sm"
         >
           <Plus className="h-4 w-4" />
-          New Skill
+          New Agent
         </button>
       </div>
 
@@ -284,7 +357,7 @@ export default function SkillsPage() {
             <input
               value={formData.name}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              placeholder="Skill name"
+              placeholder="Agent name"
               className="px-3 py-2 border rounded-md bg-background"
               required
             />
@@ -310,19 +383,37 @@ export default function SkillsPage() {
             placeholder="Description"
             className="w-full px-3 py-2 border rounded-md bg-background"
           />
-          <textarea
-            value={formData.system_prompt || ''}
-            onChange={(e) => setFormData({ ...formData, system_prompt: e.target.value })}
-            placeholder="System prompt (sent to AI as system message)"
-            className="w-full px-3 py-2 border rounded-md bg-background min-h-[80px] font-mono text-sm"
-          />
-          <textarea
-            value={formData.prompt_template || ''}
-            onChange={(e) => setFormData({ ...formData, prompt_template: e.target.value })}
-            placeholder="Prompt template (use {{variable}} syntax)"
-            className="w-full px-3 py-2 border rounded-md bg-background min-h-[80px] font-mono text-sm"
-            required
-          />
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-medium text-muted-foreground">System Prompt</span>
+              <VariableTipButton onInsert={(v) => insertIntoFormField('system_prompt', v)} />
+            </div>
+            <textarea
+              ref={createSystemRef}
+              value={formData.system_prompt || ''}
+              onChange={(e) => setFormData({ ...formData, system_prompt: e.target.value })}
+              placeholder="System prompt (sent to AI as system message)"
+              className="w-full px-3 py-2 border rounded-md bg-background min-h-[80px] font-mono text-sm"
+            />
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-medium text-muted-foreground">Prompt Template</span>
+            </div>
+            <div className="relative">
+              <textarea
+                ref={createPromptRef}
+                value={formData.prompt_template || ''}
+                onChange={(e) => setFormData({ ...formData, prompt_template: e.target.value })}
+                placeholder="Prompt template (use {{variable}} syntax)"
+                className="w-full px-3 py-2 pr-10 border rounded-md bg-background min-h-[80px] font-mono text-sm"
+                required
+              />
+              <div className="absolute top-1.5 right-1.5">
+                <VariableTipButton onInsert={(v) => insertIntoFormField('prompt_template', v)} />
+              </div>
+            </div>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <input
               value={formData.variables || '{}'}
@@ -390,7 +481,7 @@ export default function SkillsPage() {
           </div>
           <div className="flex gap-2">
             <button type="submit" disabled={createMutation.isPending} className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm disabled:opacity-50">
-              Create Skill
+              Create Agent
             </button>
             <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 border rounded-md text-sm">
               Cancel
@@ -399,43 +490,45 @@ export default function SkillsPage() {
         </form>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 h-[calc(100vh-280px)]">
-        {/* Skill list */}
-        <div className="lg:col-span-2 bg-card rounded-lg border p-4 overflow-auto">
-          <h2 className="text-sm font-semibold mb-3 text-muted-foreground uppercase tracking-wider">
-            Skills
-          </h2>
-          <div className="space-y-1">
-            {skills?.map((skill) => {
-              const Icon = CATEGORY_ICONS[skill.category] || Wand2
-              return (
-                <div
-                  key={skill.id}
-                  className={`flex items-center gap-1 p-2 rounded-md cursor-pointer hover:bg-accent ${
-                    selectedSkill?.id === skill.id ? 'bg-accent ring-1 ring-primary' : ''
-                  }`}
-                  onClick={() => setSelectedSkill(skill)}
-                >
-                  {skill.is_quick_action && skill.icon ? (
-                    <QuickActionIcon name={skill.icon} className="h-4 w-4 text-primary shrink-0" />
-                  ) : (
-                    <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
-                  )}
-                  <span className="flex-1 text-sm truncate">{skill.name}</span>
-                  {skill.is_locked && <Lock className="h-3 w-3 text-muted-foreground shrink-0" />}
-                  {skill.is_agentic && <Zap className="h-3 w-3 text-yellow-500 shrink-0" />}
-                  {skill.is_quick_action && <span className="text-[10px] px-1.5 py-0.5 bg-primary/10 text-primary rounded-full shrink-0">QA</span>}
-                </div>
-              )
-            })}
-            {skills?.length === 0 && (
-              <p className="text-sm text-muted-foreground text-center py-4">No skills yet</p>
-            )}
+      <div className="flex flex-col lg:flex-row gap-4 h-[calc(100vh-280px)]">
+        {/* Agent list */}
+        <ResizablePanel side="left" defaultWidth={220} storageKey="skills_left">
+          <div className="p-4 h-full overflow-auto">
+            <h2 className="text-sm font-semibold mb-3 text-muted-foreground uppercase tracking-wider">
+              Agents
+            </h2>
+            <div className="space-y-1">
+              {skills?.map((skill) => {
+                const Icon = CATEGORY_ICONS[skill.category] || Wand2
+                return (
+                  <div
+                    key={skill.id}
+                    className={`flex items-center gap-1 p-2 rounded-md cursor-pointer hover:bg-accent ${
+                      selectedSkill?.id === skill.id ? 'bg-accent ring-1 ring-primary' : ''
+                    }`}
+                    onClick={() => setSelectedSkill(skill)}
+                  >
+                    {skill.is_quick_action && skill.icon ? (
+                      <QuickActionIcon name={skill.icon} className="h-4 w-4 text-primary shrink-0" />
+                    ) : (
+                      <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
+                    )}
+                    <span className="flex-1 text-sm truncate">{skill.name}</span>
+                    {skill.is_locked && <Lock className="h-3 w-3 text-muted-foreground shrink-0" />}
+                    {skill.is_agentic && <Zap className="h-3 w-3 text-yellow-500 shrink-0" />}
+                    {skill.is_quick_action && <span className="text-[10px] px-1.5 py-0.5 bg-primary/10 text-primary rounded-full shrink-0">QA</span>}
+                  </div>
+                )
+              })}
+              {skills?.length === 0 && (
+                <p className="text-sm text-muted-foreground text-center py-4">No agents yet</p>
+              )}
+            </div>
           </div>
-        </div>
+        </ResizablePanel>
 
         {/* Detail / Editor */}
-        <div className={`${sidebarCollapsed ? 'lg:col-span-10' : 'lg:col-span-7'} bg-card rounded-lg border flex flex-col overflow-hidden`}>
+        <div className="flex-1 min-w-0 bg-card rounded-lg border flex flex-col overflow-hidden">
           {selectedSkill ? (
             <div className="flex flex-col h-full overflow-auto">
               {/* Header */}
@@ -480,7 +573,7 @@ export default function SkillsPage() {
                   <button
                     onClick={() => duplicateMutation.mutate(selectedSkill)}
                     className="flex items-center gap-1 px-2 py-1 text-xs border rounded hover:bg-accent"
-                    title="Duplicate skill"
+                    title="Duplicate agent"
                   >
                     <Copy className="h-3 w-3" />
                     Duplicate
@@ -608,8 +701,27 @@ export default function SkillsPage() {
 
                 {/* System Prompt */}
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground">System Prompt</label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-medium text-muted-foreground">System Prompt</label>
+                    {isEditing && (
+                      <VariableTipButton
+                        onInsert={(v) => {
+                          const el = document.getElementById('edit-system-prompt') as HTMLTextAreaElement | null
+                          const prev = selectedSkill.system_prompt || ''
+                          const start = el?.selectionStart ?? prev.length
+                          const end = el?.selectionEnd ?? start
+                          const next = prev.slice(0, start) + v + prev.slice(end)
+                          handleUpdate({ system_prompt: next })
+                          requestAnimationFrame(() => {
+                            el?.setSelectionRange(start + v.length, start + v.length)
+                            el?.focus()
+                          })
+                        }}
+                      />
+                    )}
+                  </div>
                   <textarea
+                    id="edit-system-prompt"
                     value={selectedSkill.system_prompt || ''}
                     onChange={(e) => isEditing && handleUpdate({ system_prompt: e.target.value })}
                     disabled={!isEditing}
@@ -620,12 +732,33 @@ export default function SkillsPage() {
                 {/* Prompt Template */}
                 <div>
                   <label className="text-xs font-medium text-muted-foreground">Prompt Template</label>
-                  <textarea
-                    value={selectedSkill.prompt_template || ''}
-                    onChange={(e) => isEditing && handleUpdate({ prompt_template: e.target.value })}
-                    disabled={!isEditing}
-                    className="w-full px-3 py-2 border rounded-md bg-background min-h-[120px] font-mono text-sm mt-1 disabled:opacity-60"
-                  />
+                  <div className="relative mt-1">
+                    <textarea
+                      id="edit-prompt-template"
+                      value={selectedSkill.prompt_template || ''}
+                      onChange={(e) => isEditing && handleUpdate({ prompt_template: e.target.value })}
+                      disabled={!isEditing}
+                      className="w-full px-3 py-2 pr-10 border rounded-md bg-background min-h-[120px] font-mono text-sm disabled:opacity-60"
+                    />
+                    {isEditing && (
+                      <div className="absolute top-1.5 right-1.5">
+                        <VariableTipButton
+                          onInsert={(v) => {
+                            const el = document.getElementById('edit-prompt-template') as HTMLTextAreaElement | null
+                            const prev = selectedSkill.prompt_template || ''
+                            const start = el?.selectionStart ?? prev.length
+                            const end = el?.selectionEnd ?? start
+                            const next = prev.slice(0, start) + v + prev.slice(end)
+                            handleUpdate({ prompt_template: next })
+                            requestAnimationFrame(() => {
+                              el?.setSelectionRange(start + v.length, start + v.length)
+                              el?.focus()
+                            })
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Variables */}
@@ -680,10 +813,10 @@ export default function SkillsPage() {
                   </div>
                 )}
 
-                {/* Cross-skill refs */}
+                {/* Cross-agent refs */}
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground">Cross-skill References</label>
-                  <div className="text-xs text-muted-foreground mb-1">Skills that this skill can trigger or reference</div>
+                  <label className="text-xs font-medium text-muted-foreground">Cross-agent References</label>
+                  <div className="text-xs text-muted-foreground mb-1">Agents that this agent can trigger or reference</div>
                   <div className="flex flex-wrap gap-2 mt-1">
                     {skills?.filter((s) => s.id !== selectedSkill.id).map((s) => {
                       const active = parseCrossSkillRefs(selectedSkill.cross_skill_refs).includes(s.id)
@@ -740,24 +873,18 @@ export default function SkillsPage() {
             <div className="flex items-center justify-center h-full text-muted-foreground">
               <div className="text-center">
                 <Wand2 className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                <p>Select a skill to view or edit</p>
+                <p>Select an agent to view or edit</p>
               </div>
             </div>
           )}
         </div>
 
         {/* Right panel: Test */}
-        <div className={`${sidebarCollapsed ? 'lg:col-span-1' : 'lg:col-span-3'} bg-card rounded-lg border flex flex-col overflow-hidden`}>
-          <div className="p-3 border-b flex items-center justify-between">
-            <h3 className="font-semibold text-sm">Test Skill</h3>
-            <button
-              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-              className="p-1 rounded hover:bg-accent text-muted-foreground"
-            >
-              <ChevronLeft className={`h-4 w-4 transition-transform ${sidebarCollapsed ? 'rotate-180' : ''}`} />
-            </button>
-          </div>
-          {!sidebarCollapsed && (
+        <ResizablePanel side="right" defaultWidth={320} storageKey="skills_right">
+          <div className="flex flex-col h-full">
+            <div className="p-3 border-b flex items-center justify-between">
+              <h3 className="font-semibold text-sm">Test Agent</h3>
+            </div>
             <div className="flex-1 overflow-auto p-3 space-y-3">
               {selectedSkill ? (
                 <>
@@ -787,10 +914,10 @@ export default function SkillsPage() {
                     </div>
                   )}
 
-                  {/* Cross-referenced skills */}
+                  {/* Cross-referenced agents */}
                   {parseCrossSkillRefs(selectedSkill.cross_skill_refs).length > 0 && (
                     <div className="pt-2 border-t">
-                      <label className="text-xs font-medium text-muted-foreground">Referenced Skills</label>
+                      <label className="text-xs font-medium text-muted-foreground">Referenced Agents</label>
                       <div className="space-y-1 mt-1">
                         {parseCrossSkillRefs(selectedSkill.cross_skill_refs).map((refId) => {
                           const refSkill = skills?.find((s) => s.id === refId)
@@ -810,11 +937,11 @@ export default function SkillsPage() {
                   )}
                 </>
               ) : (
-                <p className="text-sm text-muted-foreground text-center py-8">Select a skill to test</p>
+                <p className="text-sm text-muted-foreground text-center py-8">Select an agent to test</p>
               )}
             </div>
-          )}
-        </div>
+          </div>
+        </ResizablePanel>
       </div>
     </div>
   )

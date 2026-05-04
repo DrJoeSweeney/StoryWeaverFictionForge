@@ -1,25 +1,39 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useMemo } from 'react'
+import type { TipTapEditorRef } from '@/components/editor/TipTapEditor'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
-import { Plus, Trash2, Route, Target, Wand2, Loader2 } from 'lucide-react'
+import {
+  Plus, Trash2, Loader2, Route, FileText, Target, BookOpen
+} from 'lucide-react'
+import TipTapEditor from '@/components/editor/TipTapEditor'
 import AIWritingSidebar from '@/components/writing/AIWritingSidebar'
+import FrontmatterEditor from '@/components/editor/FrontmatterEditor'
+import { useDebounce } from '@/hooks/useDebounce'
+import { useProjectTags } from '@/hooks/useProjectTags'
+import DraggableTreePanel from '@/components/shared/DraggableTreePanel'
+import ResizablePanel from '@/components/shared/ResizablePanel'
 
-interface StoryBeat {
+interface Document {
   id: string
   title: string
-  description: string | null
-  act_number: number
-  position: number
-  target_word_count: number | null
-  document_id: string | null
+  content: string
+  doc_type: string
+  module: string
+  classification: string
+  parent_id: string | null
+  sort_order: number
+  word_count: number
+  structure_type?: string
+  [key: string]: any
 }
 
-interface StoryOutline {
-  id: string
-  title: string
-  structure_type: string
-  beats: StoryBeat[]
-}
+const DOC_SYSTEM_FIELDS = [
+  'id', 'created_at', 'updated_at', 'project_id', 'word_count',
+  'content', 'doc_type', 'module', 'classification', 'parent_id',
+  'sort_order', 'title', 'structure_type', 'children',
+]
+
+const STORY_PLAN_TYPES = ['outline', 'scene', 'beat']
 
 const STRUCTURES = ['three-act', 'hero-journey', 'save-the-cat', 'freytag', 'custom']
 
@@ -27,106 +41,177 @@ function getStructureLabel(s: string) {
   return s.replace('-', ' ').replace(/\b\w/g, l => l.toUpperCase())
 }
 
+function getDocTypeInfo(docType: string) {
+  if (docType === 'outline') return { label: 'Outline', icon: Route }
+  if (docType === 'scene') return { label: 'Scene', icon: FileText }
+  if (docType === 'beat') return { label: 'Beat', icon: Target }
+  return { label: docType, icon: BookOpen }
+}
+
 export default function StoryEnginePage({ projectId }: { projectId: string }) {
-  const [showOutlineForm, setShowOutlineForm] = useState(false)
-  const [selectedOutline, setSelectedOutline] = useState<StoryOutline | null>(null)
-  const [outlineForm, setOutlineForm] = useState({ title: '', structure_type: 'three-act' })
-  const [beatForm, setBeatForm] = useState({ title: '', description: '', act_number: 1, position: 0, target_word_count: '' })
-  const [showBeatForm, setShowBeatForm] = useState(false)
-  const [activeBeat, setActiveBeat] = useState<StoryBeat | null>(null)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const textareaSelectionRef = useRef<{ value: string; setValue: (v: string) => void; selectionStart: number; selectionEnd: number } | null>(null)
+  const [selectedDoc, setSelectedDoc] = useState<Document | null>(null)
+  const [showNewForm, setShowNewForm] = useState(false)
+  const [newTitle, setNewTitle] = useState('')
+  const [newDocType, setNewDocType] = useState('outline')
+  const [newParentId, setNewParentId] = useState<string | null>(null)
+  const [newStructureType, setNewStructureType] = useState('three-act')
+  const editorRef = useRef<TipTapEditorRef>(null)
   const queryClient = useQueryClient()
 
-  const { data: outlines, isLoading } = useQuery({
-    queryKey: ['outlines', projectId],
+  const { data: documents, isLoading } = useQuery({
+    queryKey: ['documents', projectId],
     queryFn: async () => {
-      const res = await api.get<StoryOutline[]>(`/story-engine/project/${projectId}`)
+      const res = await api.get<Document[]>(`/documents/project/${projectId}`)
       return res.data
     },
   })
 
-  const createOutlineMutation = useMutation({
-    mutationFn: (data: typeof outlineForm) => api.post(`/story-engine/project/${projectId}`, data),
+  const { data: projectTags } = useProjectTags(projectId)
+
+  // Filter to story-plan items only
+  const storyPlanItems = (documents || [])
+    .filter((d) => STORY_PLAN_TYPES.includes(d.doc_type))
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
+
+  const createDocMutation = useMutation({
+    mutationFn: (data: { project_id: string; title: string; parent_id: string | null; doc_type: string; structure_type?: string }) =>
+      api.post('/documents', data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['outlines', projectId] })
-      setShowOutlineForm(false)
-      setOutlineForm({ title: '', structure_type: 'three-act' })
+      queryClient.invalidateQueries({ queryKey: ['documents', projectId] })
+      setShowNewForm(false)
+      setNewTitle('')
+      setNewDocType('outline')
+      setNewParentId(null)
+      setNewStructureType('three-act')
     },
   })
 
-  const deleteOutlineMutation = useMutation({
-    mutationFn: (id: string) => api.delete(`/story-engine/${id}`),
+  const updateDocMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Partial<Document> }) =>
+      api.put(`/documents/${id}`, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['outlines', projectId] })
-      setSelectedOutline(null)
-      setActiveBeat(null)
+      queryClient.invalidateQueries({ queryKey: ['documents', projectId] })
     },
   })
 
-  const createBeatMutation = useMutation({
-    mutationFn: (data: typeof beatForm) =>
-      api.post(`/story-engine/${selectedOutline!.id}/beats`, {
-        ...data,
-        target_word_count: data.target_word_count ? parseInt(data.target_word_count) : null,
-      }),
+  const deleteDocMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/documents/${id}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['outlines', projectId] })
-      setShowBeatForm(false)
-      setBeatForm({ title: '', description: '', act_number: 1, position: 0, target_word_count: '' })
+      queryClient.invalidateQueries({ queryKey: ['documents', projectId] })
+      setSelectedDoc(null)
     },
   })
 
-  const deleteBeatMutation = useMutation({
-    mutationFn: (beatId: string) => api.delete(`/story-engine/beats/${beatId}`),
-    onSuccess: (_data, beatId) => {
-      queryClient.invalidateQueries({ queryKey: ['outlines', projectId] })
-      if (activeBeat?.id === beatId) setActiveBeat(null)
-    },
-  })
-
-  const updateBeatMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<StoryBeat> }) =>
-      api.put(`/story-engine/beats/${id}`, data),
+  const reorderMutation = useMutation({
+    mutationFn: (document_ids: string[]) =>
+      api.post('/documents/reorder', { project_id: projectId, document_ids }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['outlines', projectId] })
+      queryClient.invalidateQueries({ queryKey: ['documents', projectId] })
     },
   })
 
-  const handleCreateOutline = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!outlineForm.title.trim()) return
-    createOutlineMutation.mutate(outlineForm)
+  const nestMutation = useMutation({
+    mutationFn: ({ id, parent_id }: { id: string; parent_id: string | null }) =>
+      api.put(`/documents/${id}`, { parent_id }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['documents', projectId] })
+    },
+  })
+
+  const debouncedContent = useDebounce(selectedDoc?.content || '', 1000)
+
+  // Auto-save when debounced content changes
+  const prevDebouncedRef = useRef('')
+  if (debouncedContent !== prevDebouncedRef.current && selectedDoc && debouncedContent) {
+    prevDebouncedRef.current = debouncedContent
+    updateDocMutation.mutate({ id: selectedDoc.id, data: { content: debouncedContent } })
   }
 
-  const handleCreateBeat = (e: React.FormEvent) => {
+  const handleCreate = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!beatForm.title.trim() || !selectedOutline) return
-    createBeatMutation.mutate(beatForm)
+    if (!newTitle.trim() || !projectId) return
+    const payload: any = {
+      project_id: projectId,
+      title: newTitle,
+      parent_id: newParentId,
+      doc_type: newDocType,
+    }
+    if (newDocType === 'outline') {
+      payload.structure_type = newStructureType
+    }
+    createDocMutation.mutate(payload)
   }
 
-  const handleInsertText = (text: string) => {
-    const sel = textareaSelectionRef.current
-    if (sel) {
-      const { value, setValue, selectionStart, selectionEnd } = sel
-      const before = value.substring(0, selectionStart)
-      const after = value.substring(selectionEnd)
-      const newValue = before + text + after
-      setValue(newValue)
-      textareaSelectionRef.current = null
-    } else if (activeBeat && selectedOutline) {
-      const newDescription = (activeBeat.description || '') + '\n\n' + text
-      const updated = { ...activeBeat, description: newDescription }
-      setActiveBeat(updated)
-      updateBeatMutation.mutate({ id: activeBeat.id, data: { description: newDescription } })
+  // Build flat list of all story-plan items for parent selector, with depth labels
+  const buildParentOptions = (docs: Document[], depth = 0, parentId: string | null = null): { id: string; label: string }[] => {
+    const children = docs.filter((d) => d.parent_id === parentId)
+    let options: { id: string; label: string }[] = []
+    if (depth === 0 && parentId === null) {
+      options.push({ id: '', label: '— None (root level) —' })
+    }
+    for (const child of children) {
+      options.push({ id: child.id, label: `${'  '.repeat(depth)}${child.title}` })
+      options = options.concat(buildParentOptions(docs, depth + 1, child.id))
+    }
+    return options
+  }
+
+  const parentOptions = buildParentOptions(storyPlanItems)
+
+  const handleDocContentChange = (content: string) => {
+    if (selectedDoc) {
+      setSelectedDoc({ ...selectedDoc, content })
     }
   }
 
-  const getBeatContext = (beat: StoryBeat | null) => {
-    if (!beat || !selectedOutline) return ''
-    const outlineContext = `Outline: ${selectedOutline.title} (${selectedOutline.structure_type})\n\n`
-    const beatContext = `Beat: ${beat.title} (Act ${beat.act_number}, Position ${beat.position})\n\nDescription:\n${beat.description || ''}`
-    return outlineContext + beatContext
+  const getDocFrontmatter = (doc: Document): Record<string, any> => {
+    return Object.fromEntries(Object.entries(doc).filter(([k, v]) => {
+      if (DOC_SYSTEM_FIELDS.includes(k)) return false
+      if (v === null || v === undefined) return true
+      const t = typeof v
+      if (t === 'string' || t === 'number' || t === 'boolean') return true
+      if (Array.isArray(v)) return v.every((item) => typeof item !== 'object')
+      return false
+    }))
+  }
+
+  const existingFrontmatterKeys = useMemo(() => {
+    const keys = new Set<string>()
+    for (const doc of documents || []) {
+      for (const key of Object.keys(doc)) {
+        if (!DOC_SYSTEM_FIELDS.includes(key)) {
+          keys.add(key)
+        }
+      }
+    }
+    return Array.from(keys).sort()
+  }, [documents])
+
+  const handleFrontmatterChange = (newFrontmatter: Record<string, any>) => {
+    if (!selectedDoc) return
+    const oldFrontmatter = getDocFrontmatter(selectedDoc)
+    const deletedKeys = Object.keys(oldFrontmatter).filter((k) => !(k in newFrontmatter))
+    const payload: Record<string, any> = { ...newFrontmatter }
+    if (deletedKeys.length > 0) payload._delete_keys = deletedKeys
+    setSelectedDoc({ ...selectedDoc, ...newFrontmatter })
+    updateDocMutation.mutate({ id: selectedDoc.id, data: payload })
+  }
+
+  const handleInsertText = (text: string) => {
+    if (!selectedDoc || !editorRef.current) return
+    const sel = editorRef.current.getSelectionInfo()
+    if (sel && !sel.empty) {
+      editorRef.current.replaceSelection(text)
+    } else {
+      editorRef.current.insertAtCursor(text)
+    }
+    editorRef.current.focus()
+  }
+
+  const handleAppendText = (text: string) => {
+    if (!selectedDoc || !editorRef.current) return
+    editorRef.current.appendToEnd(text)
+    editorRef.current.focus()
   }
 
   if (isLoading) {
@@ -141,271 +226,210 @@ export default function StoryEnginePage({ projectId }: { projectId: string }) {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <button
-          onClick={() => setShowOutlineForm(!showOutlineForm)}
+          onClick={() => setShowNewForm(!showNewForm)}
           className="flex items-center gap-2 px-3 py-2 bg-primary text-primary-foreground rounded-md text-sm"
         >
           <Plus className="h-4 w-4" />
-          New Outline
+          New Item
         </button>
       </div>
 
-      {showOutlineForm && (
-        <form onSubmit={handleCreateOutline} className="p-4 bg-card rounded-lg border space-y-3">
+      {showNewForm && (
+        <form onSubmit={handleCreate} className="p-4 bg-card rounded-lg border space-y-3">
           <div className="flex gap-2">
+            <select
+              value={newDocType}
+              onChange={(e) => setNewDocType(e.target.value)}
+              className="px-3 py-2 border rounded-md bg-background text-sm"
+            >
+              <option value="outline">Outline</option>
+              <option value="scene">Scene</option>
+              <option value="beat">Beat</option>
+            </select>
+            {newDocType === 'outline' && (
+              <select
+                value={newStructureType}
+                onChange={(e) => setNewStructureType(e.target.value)}
+                className="px-3 py-2 border rounded-md bg-background text-sm"
+              >
+                {STRUCTURES.map((s) => (
+                  <option key={s} value={s}>{getStructureLabel(s)}</option>
+                ))}
+              </select>
+            )}
+            <select
+              value={newParentId || ''}
+              onChange={(e) => setNewParentId(e.target.value || null)}
+              className="px-3 py-2 border rounded-md bg-background text-sm"
+              title="Parent item"
+            >
+              {parentOptions.map((opt) => (
+                <option key={opt.id} value={opt.id}>{opt.label}</option>
+              ))}
+            </select>
             <input
-              value={outlineForm.title}
-              onChange={(e) => setOutlineForm({ ...outlineForm, title: e.target.value })}
-              placeholder="Outline title"
+              value={newTitle}
+              onChange={(e) => setNewTitle(e.target.value)}
+              placeholder="Title"
               className="flex-1 px-3 py-2 border rounded-md bg-background"
               required
             />
-            <select
-              value={outlineForm.structure_type}
-              onChange={(e) => setOutlineForm({ ...outlineForm, structure_type: e.target.value })}
-              className="px-3 py-2 border rounded-md bg-background text-sm"
-            >
-              {STRUCTURES.map((s) => (
-                <option key={s} value={s}>{getStructureLabel(s)}</option>
-              ))}
-            </select>
             <button
               type="submit"
-              disabled={createOutlineMutation.isPending}
+              disabled={createDocMutation.isPending}
               className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm disabled:opacity-50"
             >
-              Create
+              Add
             </button>
           </div>
         </form>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 h-[calc(100vh-280px)]">
-        {/* Outline list */}
-        <div className="lg:col-span-2 bg-card rounded-lg border p-4 overflow-auto">
-          <h2 className="text-sm font-semibold mb-3 text-muted-foreground uppercase tracking-wider">
-            Outlines
-          </h2>
-          <div className="space-y-1">
-            {outlines && outlines.length > 0 ? (
-              outlines.map((outline) => (
-                <div
-                  key={outline.id}
-                  className={`flex items-center gap-1 p-2 rounded-md cursor-pointer hover:bg-accent ${
-                    selectedOutline?.id === outline.id ? 'bg-accent' : ''
-                  }`}
-                  onClick={() => {
-                    setSelectedOutline(selectedOutline?.id === outline.id ? null : outline)
-                    setActiveBeat(null)
-                  }}
-                >
-                  <Route className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <span className="flex-1 text-sm truncate">{outline.title}</span>
-                  <span className="text-[10px] text-muted-foreground shrink-0 uppercase">
-                    {outline.beats?.length || 0}b
-                  </span>
-                </div>
-              ))
-            ) : (
-              <p className="text-sm text-muted-foreground text-center py-4">
-                No outlines yet
-              </p>
-            )}
+      <div className="flex flex-col lg:flex-row gap-4 h-[calc(100vh-280px)]">
+        {/* Tree panel */}
+        <ResizablePanel side="left" defaultWidth={220} storageKey="story_engine_left">
+          <div className="p-4 h-full overflow-auto">
+            <h2 className="text-sm font-semibold mb-3 text-muted-foreground uppercase tracking-wider">
+              Story Plan
+            </h2>
+            <DraggableTreePanel
+              items={storyPlanItems.map((d) => ({ ...d, title: d.title, parent_id: d.parent_id || null, sort_order: d.sort_order || 0 }))}
+              selectedId={selectedDoc?.id}
+              onSelect={(item) => setSelectedDoc(item as Document)}
+              onReorder={(ids) => reorderMutation.mutate(ids)}
+              onNest={(id, parentId) => nestMutation.mutate({ id, parent_id: parentId })}
+              renderIcon={(item) => {
+                const Icon = getDocTypeInfo(item.doc_type).icon
+                return <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
+              }}
+              renderBadge={(item) => (
+                <span className="text-xs text-muted-foreground shrink-0">{item.word_count}w</span>
+              )}
+              emptyMessage="No items yet"
+            />
           </div>
-        </div>
+        </ResizablePanel>
 
-        {/* Outline detail / beats */}
-        <div className={`${sidebarCollapsed ? 'lg:col-span-10' : 'lg:col-span-7'} bg-card rounded-lg border flex flex-col overflow-hidden`}>
-          {selectedOutline ? (
+        {/* Editor */}
+        <div className="flex-1 min-w-0 bg-card rounded-lg border flex flex-col overflow-hidden">
+          {selectedDoc ? (
             <div className="flex flex-col h-full">
-              {/* Header bar */}
               <div className="flex items-center justify-between p-3 border-b">
                 <div className="flex items-center gap-2 flex-1">
                   <span className="text-xs px-2 py-0.5 bg-secondary rounded-full uppercase tracking-wider">
-                    {getStructureLabel(selectedOutline.structure_type)}
+                    {getDocTypeInfo(selectedDoc.doc_type).label}
                   </span>
-                  <span className="text-lg font-semibold">{selectedOutline.title}</span>
+                  <input
+                    value={selectedDoc.title}
+                    onChange={(e) => {
+                      const updated = { ...selectedDoc, title: e.target.value }
+                      setSelectedDoc(updated)
+                      updateDocMutation.mutate({ id: selectedDoc.id, data: { title: e.target.value } })
+                    }}
+                    className="text-lg font-semibold bg-transparent border-none focus:outline-none focus:ring-0 flex-1"
+                  />
                 </div>
                 <div className="flex items-center gap-3">
+                  <span className="text-xs text-muted-foreground">
+                    {selectedDoc.word_count} words
+                  </span>
+                  {updateDocMutation.isPending && (
+                    <span className="text-xs text-muted-foreground">Saving...</span>
+                  )}
                   <button
-                    onClick={() => setShowBeatForm(!showBeatForm)}
-                    className="flex items-center gap-1 px-2 py-1 bg-primary text-primary-foreground rounded text-xs"
-                  >
-                    <Plus className="h-3 w-3" />
-                    Add Beat
-                  </button>
-                  <button
-                    onClick={() => deleteOutlineMutation.mutate(selectedOutline.id)}
+                    onClick={() => deleteDocMutation.mutate(selectedDoc.id)}
                     className="p-1 text-muted-foreground hover:text-destructive"
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
                 </div>
               </div>
-
-              {/* Beats content */}
-              <div className="flex-1 overflow-auto p-4 space-y-4">
-                {showBeatForm && (
-                  <form onSubmit={handleCreateBeat} className="p-3 bg-background rounded border space-y-2">
-                    <input
-                      value={beatForm.title}
-                      onChange={(e) => setBeatForm({ ...beatForm, title: e.target.value })}
-                      placeholder="Beat title"
-                      className="w-full px-2 py-1 border rounded bg-background text-sm"
-                      required
-                    />
-                    <textarea
-                      value={beatForm.description}
-                      onChange={(e) => setBeatForm({ ...beatForm, description: e.target.value })}
-                      placeholder="Description"
-                      className="w-full px-2 py-1 border rounded bg-background text-sm min-h-[60px]"
-                    />
-                    <div className="flex gap-2">
-                      <input
-                        type="number"
-                        value={beatForm.act_number}
-                        onChange={(e) => setBeatForm({ ...beatForm, act_number: parseInt(e.target.value) || 1 })}
-                        placeholder="Act"
-                        className="w-20 px-2 py-1 border rounded bg-background text-sm"
-                        min={1}
-                      />
-                      <input
-                        type="number"
-                        value={beatForm.position}
-                        onChange={(e) => setBeatForm({ ...beatForm, position: parseInt(e.target.value) || 0 })}
-                        placeholder="Position"
-                        className="w-24 px-2 py-1 border rounded bg-background text-sm"
-                        min={0}
-                      />
-                      <input
-                        type="number"
-                        value={beatForm.target_word_count}
-                        onChange={(e) => setBeatForm({ ...beatForm, target_word_count: e.target.value })}
-                        placeholder="Target words"
-                        className="w-28 px-2 py-1 border rounded bg-background text-sm"
-                      />
-                      <button type="submit" className="px-3 py-1 bg-primary text-primary-foreground rounded text-xs">
-                        Add
-                      </button>
-                    </div>
-                  </form>
-                )}
-
-                <div className="space-y-2">
-                  {selectedOutline.beats?.sort((a, b) => a.position - b.position).map((beat) => (
-                    <div
-                      key={beat.id}
-                      className={`flex items-start gap-3 p-3 bg-background rounded border cursor-pointer transition-colors ${
-                        activeBeat?.id === beat.id ? 'border-primary ring-1 ring-primary' : ''
-                      }`}
-                      onClick={() => setActiveBeat(activeBeat?.id === beat.id ? null : beat)}
-                    >
-                      <div className="flex items-center justify-center w-8 h-8 rounded-full bg-secondary text-xs font-bold shrink-0">
-                        {beat.act_number}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between">
-                          <h5 className="font-medium text-sm">{beat.title}</h5>
-                          <div className="flex items-center gap-1">
-                            <button
-                              onClick={(e) => { e.stopPropagation(); setActiveBeat(beat) }}
-                              className="p-1 text-muted-foreground hover:text-primary"
-                              title="AI Assist"
-                            >
-                              <Wand2 className="h-3 w-3" />
-                            </button>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); deleteBeatMutation.mutate(beat.id) }}
-                              className="p-0.5 text-muted-foreground hover:text-destructive"
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </button>
-                          </div>
-                        </div>
-                        {activeBeat?.id === beat.id ? (
-                          <BeatTextarea
-                            beat={beat}
-                            onChange={(description) => {
-                              const updated = { ...beat, description }
-                              setActiveBeat(updated)
-                              updateBeatMutation.mutate({ id: beat.id, data: { description } })
-                            }}
-                            onSelectionChange={(sel) => { textareaSelectionRef.current = sel }}
-                          />
-                        ) : (
-                          beat.description && (
-                            <p className="text-sm text-muted-foreground mt-1">{beat.description}</p>
-                          )
-                        )}
-                        <div className="flex items-center gap-3 mt-2">
-                          {beat.target_word_count && (
-                            <span className="text-xs text-muted-foreground flex items-center gap-1">
-                              <Target className="h-3 w-3" />
-                              {beat.target_word_count} words
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                  {(!selectedOutline.beats || selectedOutline.beats.length === 0) && (
-                    <p className="text-sm text-muted-foreground text-center py-4">No beats yet</p>
-                  )}
-                </div>
+              <FrontmatterEditor
+                key={selectedDoc.id}
+                frontmatter={getDocFrontmatter(selectedDoc)}
+                systemFields={DOC_SYSTEM_FIELDS}
+                existingKeys={existingFrontmatterKeys}
+                documents={(documents || []).map((d) => ({ id: d.id, title: d.title }))}
+                onChange={handleFrontmatterChange}
+                onNavigateToDocument={(docId, heading) => {
+                  const doc = storyPlanItems.find((d) => d.id === docId)
+                  if (doc) {
+                    setSelectedDoc(doc)
+                    if (heading) {
+                      requestAnimationFrame(() => {
+                        const pm = document.querySelector('.ProseMirror')
+                        if (!pm) return
+                        const headings = pm.querySelectorAll('h1, h2, h3, h4, h5, h6')
+                        for (const h of headings) {
+                          if (h.textContent?.trim().toLowerCase() === heading.trim().toLowerCase()) {
+                            h.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                            break
+                          }
+                        }
+                      })
+                    }
+                  }
+                }}
+              />
+              <div className="flex-1 overflow-hidden">
+                <TipTapEditor
+                  key={selectedDoc.id}
+                  ref={editorRef}
+                  content={selectedDoc.content}
+                  onChange={handleDocContentChange}
+                  documents={(documents || []).map((d) => ({ id: d.id, title: d.title, content: d.content }))}
+                  tags={projectTags || []}
+                  onNavigateToDocument={(docId, heading) => {
+                    const doc = storyPlanItems.find((d) => d.id === docId)
+                    if (doc) {
+                      setSelectedDoc(doc)
+                      if (heading) {
+                        requestAnimationFrame(() => {
+                          const pm = document.querySelector('.ProseMirror')
+                          if (!pm) return
+                          const headings = pm.querySelectorAll('h1, h2, h3, h4, h5, h6')
+                          for (const h of headings) {
+                            if (h.textContent?.trim().toLowerCase() === heading.trim().toLowerCase()) {
+                              h.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                              break
+                            }
+                          }
+                        })
+                      }
+                    }
+                  }}
+                  onTagClick={(tag) => {
+                    console.log('Tag clicked:', tag)
+                  }}
+                />
               </div>
             </div>
           ) : (
             <div className="flex items-center justify-center h-full text-muted-foreground">
               <div className="text-center">
                 <Route className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                <p>Select an outline to view beats</p>
+                <p>Select an item to start planning</p>
               </div>
             </div>
           )}
         </div>
 
         {/* AI Sidebar */}
-        <div className={`${sidebarCollapsed ? 'lg:col-span-1' : 'lg:col-span-3'} overflow-hidden rounded-lg border`}>
+        <ResizablePanel side="right" defaultWidth={320} storageKey="story_engine_right">
           <AIWritingSidebar
-            getSelectedText={() => textareaSelectionRef.current?.value.substring(textareaSelectionRef.current.selectionStart, textareaSelectionRef.current.selectionEnd) || ''}
-            getFullContext={() => getBeatContext(activeBeat)}
+            getSelectedText={() => editorRef.current?.getSelectionInfo()?.text || ''}
+            getFullContext={() => selectedDoc?.content || ''}
             onInsert={handleInsertText}
+            onAppend={handleAppendText}
             projectId={projectId}
-            currentDocumentType="outline"
-            currentFieldName={activeBeat ? 'beat_description' : 'outline_content'}
-            onCollapseChange={setSidebarCollapsed}
+            currentDocumentId={selectedDoc?.id}
+            currentDocumentTitle={selectedDoc?.title}
+            currentDocumentType={selectedDoc?.doc_type}
+            currentFieldName="content"
+            moduleName="StoryPlan"
           />
-        </div>
+        </ResizablePanel>
       </div>
     </div>
-  )
-}
-
-function BeatTextarea({ beat, onChange, onSelectionChange }: { beat: StoryBeat; onChange: (description: string) => void; onSelectionChange: (sel: { value: string; setValue: (v: string) => void; selectionStart: number; selectionEnd: number }) => void }) {
-  const taRef = useRef<HTMLTextAreaElement>(null)
-  const value = beat.description || ''
-
-  const reportSelection = () => {
-    if (taRef.current) {
-      onSelectionChange({
-        value,
-        setValue: onChange,
-        selectionStart: taRef.current.selectionStart,
-        selectionEnd: taRef.current.selectionEnd,
-      })
-    }
-  }
-
-  return (
-    <textarea
-      ref={taRef}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      onBlur={reportSelection}
-      onMouseUp={reportSelection}
-      onKeyUp={reportSelection}
-      placeholder="Beat description..."
-      className="w-full mt-2 px-2 py-1 border rounded bg-background text-sm min-h-[100px]"
-      autoFocus
-    />
   )
 }

@@ -1,6 +1,8 @@
 from enum import Enum
 import re
 
+from app.services.ai.prompt_renderer import render_prompt
+
 
 class TaskTier(str, Enum):
     QUICK_EDIT = "quick_edit"      # Rewrite, shorten, expand — no reasoning needed
@@ -12,7 +14,7 @@ class TaskTier(str, Enum):
 # Quick edit actions need no reasoning
 QUICK_EDIT_ACTIONS = {"rewrite", "shorten", "expand", "describe"}
 CONTENT_GEN_ACTIONS = {"continue", "generate"}
-DEEP_WORK_ACTIONS = {"outline_plan", "outline_generate", "outline_parse", "outline_section_write", "outline_to_text"}
+DEEP_WORK_ACTIONS = {"outline_plan", "outline_generate", "outline_parse", "outline_section_write", "outline_to_text", "worldbuild_technology", "worldbuild_politics", "worldbuild_economics", "worldbuild_world", "worldbuild_magic", "worldbuild_history", "worldbuild_culture", "worldbuild_rules", "worldbuild_locations", "worldbuild_creatures", "create_character", "character_factual", "character_appearance", "character_personality", "character_background", "character_motivation", "character_voice", "character_notes"}
 
 # Keywords that trigger research (only when explicitly requested)
 RESEARCH_KEYWORDS = {
@@ -50,6 +52,8 @@ def classify_task_heuristic(
     action: str | None = None,
     document_type: str | None = None,
     field_name: str | None = None,
+    document_title: str | None = None,
+    module: str | None = None,
 ) -> tuple[TaskTier, float]:
     """
     Fast heuristic classification. Returns (tier, confidence).
@@ -59,6 +63,9 @@ def classify_task_heuristic(
     words = set(re.findall(r'\b[\w\']+\b', prompt_lower))
     doc_type = (document_type or "").lower()
     field = (field_name or "").lower()
+    # document_title and module are available for future heuristic use
+    _ = document_title
+    _ = module
 
     # Action-based classification (highest confidence)
     if action:
@@ -161,6 +168,8 @@ Rules:
 - "Continue my story" = CONTENT_GEN, not RESEARCH.
 - "Research Victorian London" = RESEARCH.
 - "Create a new villain" = DEEP_WORK.
+- "Create a character" = DEEP_WORK.
+- "Generate character background" = DEEP_WORK.
 - "Rewrite this paragraph" = QUICK_EDIT.
 - When editing a character's factual field (name, age, role) → QUICK_EDIT.
 - When editing a character's creative field (background, personality, goals) → CONTENT_GEN.
@@ -175,21 +184,27 @@ async def classify_task_llm(
     prompt: str,
     provider,
     classifier_prompt: str | None = None,
-    document_type: str | None = None,
-    field_name: str | None = None,
+    template_context: dict | None = None,
 ) -> tuple[TaskTier, float]:
     """
     LLM-based classification fallback for ambiguous prompts.
     Uses a lightweight call to the reasoning model.
+    Renders the classifier prompt with the full template context.
     """
     from app.services.ai.base import Message
     import json
 
-    doc_type = document_type or "unknown"
-    field = field_name or "unknown"
+    ctx = {
+        "text": prompt,
+        "document_type": template_context.get("document_type", "unknown") if template_context else "unknown",
+        "field_name": template_context.get("field_name", "unknown") if template_context else "unknown",
+        "document_title": template_context.get("document_title", "") if template_context else "",
+        "module": template_context.get("module", "") if template_context else "",
+        "fullContext": template_context.get("fullContext", "") if template_context else "",
+    }
 
     tmpl = classifier_prompt or _DEFAULT_CLASSIFIER_PROMPT
-    system_prompt = tmpl.replace("{{document_type}}", doc_type).replace("{{field_name}}", field)
+    system_prompt = render_prompt(tmpl, ctx)
 
     messages = [
         Message(role="system", content=system_prompt),
@@ -223,13 +238,21 @@ async def classify_task(
     action: str | None = None,
     provider=None,
     classifier_prompt: str | None = None,
-    document_type: str | None = None,
-    field_name: str | None = None,
+    template_context: dict | None = None,
 ) -> TaskTier:
     """
     Hybrid classifier: heuristic first, LLM fallback if uncertain.
+    template_context carries all available prompt variables (document_type,
+    field_name, document_title, module, etc.) for rendering classifier prompts.
     """
-    tier, confidence = classify_task_heuristic(prompt, action, document_type, field_name)
+    document_type = template_context.get("document_type") if template_context else None
+    field_name = template_context.get("field_name") if template_context else None
+    document_title = template_context.get("document_title") if template_context else None
+    module = template_context.get("module") if template_context else None
+
+    tier, confidence = classify_task_heuristic(
+        prompt, action, document_type, field_name, document_title, module
+    )
 
     if confidence >= HEURISTIC_CONFIDENCE_THRESHOLD:
         return tier
@@ -239,8 +262,7 @@ async def classify_task(
         tier, _ = await classify_task_llm(
             prompt, provider,
             classifier_prompt=classifier_prompt,
-            document_type=document_type,
-            field_name=field_name,
+            template_context=template_context,
         )
         return tier
 

@@ -10,7 +10,7 @@ class StoryBible(Base):
     
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     project_id = Column(String, ForeignKey("projects.id"), nullable=False)
-    category = Column(String, nullable=False)  # world, magic, history, culture, rules
+    category = Column(String, nullable=False)  # world, magic, history, culture, rules, locations, creatures, technology, politics, economics
     title = Column(String, nullable=False)
     content = Column(Text, default="")
     tags = Column(String, nullable=True)  # comma-separated

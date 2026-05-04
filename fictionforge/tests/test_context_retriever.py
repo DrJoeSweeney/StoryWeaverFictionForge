@@ -22,6 +22,7 @@ def mock_storage():
     storage.list_documents = AsyncMock(return_value=[
         {"id": "ch1", "title": "Chapter 1", "doc_type": "chapter", "content": "Once upon..."},
         {"id": "ch2", "title": "Chapter 2", "doc_type": "chapter", "content": "Then suddenly..."},
+        {"id": "act1", "title": "Act 1", "doc_type": "outline", "content": "The hero leaves home"},
     ])
     storage.get_document = AsyncMock(return_value={
         "id": "ch1", "title": "Chapter 1", "content": "Full chapter text..."

@@ -1,12 +1,15 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useMemo } from 'react'
 import type { TipTapEditorRef } from './TipTapEditor'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 import {
-  ChevronRight, ChevronDown, FileText, Folder, Plus, Trash2, Loader2
+  FileText, Folder, Plus, Trash2, Loader2
 } from 'lucide-react'
+import DraggableTreePanel from '@/components/shared/DraggableTreePanel'
+import ResizablePanel from '@/components/shared/ResizablePanel'
 import TipTapEditor from './TipTapEditor'
 import AIWritingSidebar from '../writing/AIWritingSidebar'
+import FrontmatterEditor from './FrontmatterEditor'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useProjectTags } from '@/hooks/useProjectTags'
 
@@ -15,18 +18,22 @@ interface Document {
   title: string
   content: string
   doc_type: string
+  module: string
+  classification: string
   parent_id: string | null
   sort_order: number
   word_count: number
   children?: Document[]
+  [key: string]: any
 }
+
+const DOC_SYSTEM_FIELDS = ['id', 'created_at', 'updated_at', 'project_id', 'word_count', 'content', 'doc_type', 'module', 'classification', 'parent_id', 'sort_order', 'title']
 
 export default function DocumentEditor({ projectId }: { projectId: string }) {
   const [selectedDoc, setSelectedDoc] = useState<Document | null>(null)
-  const [expandedDocs, setExpandedDocs] = useState<Set<string>>(new Set())
   const [showNewDocForm, setShowNewDocForm] = useState(false)
   const [newDocTitle, setNewDocTitle] = useState('')
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [newDocParentId, setNewDocParentId] = useState<string | null>(null)
   const editorRef = useRef<TipTapEditorRef>(null)
   const queryClient = useQueryClient()
 
@@ -50,6 +57,7 @@ export default function DocumentEditor({ projectId }: { projectId: string }) {
       queryClient.invalidateQueries({ queryKey: ['documents', projectId] })
       setShowNewDocForm(false)
       setNewDocTitle('')
+      setNewDocParentId(null)
     },
   })
 
@@ -69,33 +77,70 @@ export default function DocumentEditor({ projectId }: { projectId: string }) {
     },
   })
 
-  const toggleExpand = (docId: string) => {
-    setExpandedDocs((prev) => {
-      const next = new Set(prev)
-      if (next.has(docId)) {
-        next.delete(docId)
-      } else {
-        next.add(docId)
-      }
-      return next
-    })
-  }
-
   const handleCreateDoc = (e: React.FormEvent) => {
     e.preventDefault()
     if (!newDocTitle.trim() || !projectId) return
     createDocMutation.mutate({
       project_id: projectId,
       title: newDocTitle,
-      parent_id: null,
+      parent_id: newDocParentId,
       doc_type: 'note',
     })
   }
+
+  // Build flat list of all notes for parent selector, with depth labels
+  const buildParentOptions = (docs: Document[], depth = 0, parentId: string | null = null): { id: string; label: string }[] => {
+    const children = docs.filter((d) => d.parent_id === parentId)
+    let options: { id: string; label: string }[] = []
+    if (depth === 0 && parentId === null) {
+      options.push({ id: '', label: '— None (root level) —' })
+    }
+    for (const child of children) {
+      options.push({ id: child.id, label: `${'  '.repeat(depth)}${child.title}` })
+      options = options.concat(buildParentOptions(docs, depth + 1, child.id))
+    }
+    return options
+  }
+
+  const parentOptions = buildParentOptions(notes)
 
   const handleDocContentChange = (content: string) => {
     if (selectedDoc) {
       setSelectedDoc({ ...selectedDoc, content })
     }
+  }
+
+  const getDocFrontmatter = (doc: Document): Record<string, any> => {
+    return Object.fromEntries(Object.entries(doc).filter(([k, v]) => {
+      if (DOC_SYSTEM_FIELDS.includes(k)) return false
+      if (v === null || v === undefined) return true
+      const t = typeof v
+      if (t === 'string' || t === 'number' || t === 'boolean') return true
+      if (Array.isArray(v)) return v.every((item) => typeof item !== 'object')
+      return false
+    }))
+  }
+
+  const existingFrontmatterKeys = useMemo(() => {
+    const keys = new Set<string>()
+    for (const doc of documents || []) {
+      for (const key of Object.keys(doc)) {
+        if (!DOC_SYSTEM_FIELDS.includes(key)) {
+          keys.add(key)
+        }
+      }
+    }
+    return Array.from(keys).sort()
+  }, [documents])
+
+  const handleFrontmatterChange = (newFrontmatter: Record<string, any>) => {
+    if (!selectedDoc) return
+    const oldFrontmatter = getDocFrontmatter(selectedDoc)
+    const deletedKeys = Object.keys(oldFrontmatter).filter((k) => !(k in newFrontmatter))
+    const payload: Record<string, any> = { ...newFrontmatter }
+    if (deletedKeys.length > 0) payload._delete_keys = deletedKeys
+    setSelectedDoc({ ...selectedDoc, ...newFrontmatter })
+    updateDocMutation.mutate({ id: selectedDoc.id, data: payload })
   }
 
   const debouncedContent = useDebounce(selectedDoc?.content || '', 1000)
@@ -116,40 +161,21 @@ export default function DocumentEditor({ projectId }: { projectId: string }) {
     editorRef.current.focus()
   }
 
-  const renderDocTree = (docs: Document[], level = 0) => {
-    return docs.map((doc) => (
-      <div key={doc.id} style={{ marginLeft: level * 16 }}>
-        <div
-          className={`flex items-center gap-1 p-2 rounded-md cursor-pointer hover:bg-accent ${
-            selectedDoc?.id === doc.id ? 'bg-accent' : ''
-          }`}
-          onClick={() => setSelectedDoc(doc)}
-        >
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              toggleExpand(doc.id)
-            }}
-            className="p-0.5"
-          >
-            {expandedDocs.has(doc.id) ? (
-              <ChevronDown className="h-4 w-4" />
-            ) : (
-              <ChevronRight className="h-4 w-4" />
-            )}
-          </button>
-          {doc.doc_type === 'folder' ? (
-            <Folder className="h-4 w-4 text-muted-foreground" />
-          ) : (
-            <FileText className="h-4 w-4 text-muted-foreground" />
-          )}
-          <span className="flex-1 text-sm truncate">{doc.title}</span>
-          <span className="text-xs text-muted-foreground">{doc.word_count}w</span>
-        </div>
-        {expandedDocs.has(doc.id) && doc.children && renderDocTree(doc.children, level + 1)}
-      </div>
-    ))
-  }
+  const reorderMutation = useMutation({
+    mutationFn: (document_ids: string[]) =>
+      api.post('/documents/reorder', { project_id: projectId, document_ids }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['documents', projectId] })
+    },
+  })
+
+  const nestMutation = useMutation({
+    mutationFn: ({ id, parent_id }: { id: string; parent_id: string | null }) =>
+      api.put(`/documents/${id}`, { parent_id }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['documents', projectId] })
+    },
+  })
 
   if (isLoading) {
     return (
@@ -174,6 +200,16 @@ export default function DocumentEditor({ projectId }: { projectId: string }) {
       {showNewDocForm && (
         <form onSubmit={handleCreateDoc} className="p-4 bg-card rounded-lg border space-y-3">
           <div className="flex gap-2">
+            <select
+              value={newDocParentId || ''}
+              onChange={(e) => setNewDocParentId(e.target.value || null)}
+              className="px-3 py-2 border rounded-md bg-background text-sm"
+              title="Parent note"
+            >
+              {parentOptions.map((opt) => (
+                <option key={opt.id} value={opt.id}>{opt.label}</option>
+              ))}
+            </select>
             <input
               value={newDocTitle}
               onChange={(e) => setNewDocTitle(e.target.value)}
@@ -192,25 +228,36 @@ export default function DocumentEditor({ projectId }: { projectId: string }) {
         </form>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 h-[calc(100vh-280px)]">
+      <div className="flex flex-col lg:flex-row gap-4 h-[calc(100vh-280px)]">
         {/* Document tree */}
-        <div className="lg:col-span-2 bg-card rounded-lg border p-4 overflow-auto">
-          <h2 className="text-sm font-semibold mb-3 text-muted-foreground uppercase tracking-wider">
-            Notes
-          </h2>
-          <div className="space-y-1">
-            {notes && notes.length > 0 ? (
-              renderDocTree(notes)
-            ) : (
-              <p className="text-sm text-muted-foreground text-center py-4">
-                No notes yet
-              </p>
-            )}
+        <ResizablePanel side="left" defaultWidth={220} storageKey="document_editor_left">
+          <div className="p-4 h-full overflow-auto">
+            <h2 className="text-sm font-semibold mb-3 text-muted-foreground uppercase tracking-wider">
+              Notes
+            </h2>
+            <DraggableTreePanel
+              items={notes.map((d) => ({ ...d, title: d.title, parent_id: d.parent_id || null, sort_order: d.sort_order || 0 }))}
+              selectedId={selectedDoc?.id}
+              onSelect={(item) => setSelectedDoc(item as Document)}
+              onReorder={(ids) => reorderMutation.mutate(ids)}
+              onNest={(id, parentId) => nestMutation.mutate({ id, parent_id: parentId })}
+              renderIcon={(item) =>
+                item.doc_type === 'folder' ? (
+                  <Folder className="h-4 w-4 text-muted-foreground shrink-0" />
+                ) : (
+                  <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                )
+              }
+              renderBadge={(item) => (
+                <span className="text-xs text-muted-foreground shrink-0">{item.word_count}w</span>
+              )}
+              emptyMessage="No notes yet"
+            />
           </div>
-        </div>
+        </ResizablePanel>
 
         {/* Editor */}
-        <div className={`${sidebarCollapsed ? 'lg:col-span-10' : 'lg:col-span-7'} bg-card rounded-lg border flex flex-col overflow-hidden`}>
+        <div className="flex-1 min-w-0 bg-card rounded-lg border flex flex-col overflow-hidden">
           {selectedDoc ? (
             <div className="flex flex-col h-full">
               <div className="flex items-center justify-between p-3 border-b">
@@ -238,17 +285,57 @@ export default function DocumentEditor({ projectId }: { projectId: string }) {
                   </button>
                 </div>
               </div>
+              <FrontmatterEditor
+                key={selectedDoc.id}
+                frontmatter={getDocFrontmatter(selectedDoc)}
+                systemFields={DOC_SYSTEM_FIELDS}
+                existingKeys={existingFrontmatterKeys}
+                documents={(documents || []).map((d) => ({ id: d.id, title: d.title }))}
+                onChange={handleFrontmatterChange}
+                onNavigateToDocument={(docId, heading) => {
+                  const doc = notes.find((d) => d.id === docId)
+                  if (doc) {
+                    setSelectedDoc(doc)
+                    if (heading) {
+                      requestAnimationFrame(() => {
+                        const pm = document.querySelector('.ProseMirror')
+                        if (!pm) return
+                        const headings = pm.querySelectorAll('h1, h2, h3, h4, h5, h6')
+                        for (const h of headings) {
+                          if (h.textContent?.trim().toLowerCase() === heading.trim().toLowerCase()) {
+                            h.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                            break
+                          }
+                        }
+                      })
+                    }
+                  }
+                }}
+              />
               <div className="flex-1 overflow-hidden">
                 <TipTapEditor
                   ref={editorRef}
                   content={selectedDoc.content}
                   onChange={handleDocContentChange}
-                  documents={(documents || []).map((d) => ({ id: d.id, title: d.title }))}
+                  documents={(documents || []).map((d) => ({ id: d.id, title: d.title, content: d.content }))}
                   tags={projectTags || []}
-                  onNavigateToDocument={(docId) => {
+                  onNavigateToDocument={(docId, heading) => {
                     const doc = notes.find((d) => d.id === docId)
                     if (doc) {
                       setSelectedDoc(doc)
+                      if (heading) {
+                        requestAnimationFrame(() => {
+                          const pm = document.querySelector('.ProseMirror')
+                          if (!pm) return
+                          const headings = pm.querySelectorAll('h1, h2, h3, h4, h5, h6')
+                          for (const h of headings) {
+                            if (h.textContent?.trim().toLowerCase() === heading.trim().toLowerCase()) {
+                              h.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                              break
+                            }
+                          }
+                        })
+                      }
                     }
                   }}
                   onTagClick={(tag) => {
@@ -268,18 +355,19 @@ export default function DocumentEditor({ projectId }: { projectId: string }) {
         </div>
 
         {/* AI Sidebar */}
-        <div className={`${sidebarCollapsed ? 'lg:col-span-1' : 'lg:col-span-3'} overflow-hidden rounded-lg border`}>
+        <ResizablePanel side="right" defaultWidth={320} storageKey="document_editor_right">
           <AIWritingSidebar
             getSelectedText={() => editorRef.current?.getSelectionInfo()?.text || ''}
             getFullContext={() => selectedDoc?.content || ''}
             onInsert={handleInsertText}
             projectId={projectId}
             currentDocumentId={selectedDoc?.id}
+            currentDocumentTitle={selectedDoc?.title}
             currentDocumentType={selectedDoc?.doc_type}
             currentFieldName="content"
-            onCollapseChange={setSidebarCollapsed}
+            moduleName="Notes"
           />
-        </div>
+        </ResizablePanel>
       </div>
     </div>
   )

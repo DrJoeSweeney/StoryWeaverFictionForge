@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -11,6 +12,7 @@ from app.models.ai_provider import AIProviderConfig
 from app.services.ai.base import Message
 from app.services.ai.manager import ai_manager, decrypt_credentials
 from app.services.ai.agentic_orchestrator import AgenticOrchestrator
+from app.services.ai.activity_logger import log_ai_activity
 from app.services.storage.base import BaseStorage
 from app.api.deps import get_storage_dep
 
@@ -110,14 +112,42 @@ async def complete(
                     content="Follow this author's style guide when writing:\n\n" + sg_context
                 ))
     
+    import time
+    start_time = time.time()
     try:
         response = await ai_provider.complete(
             messages=messages,
             model=req.model or "",
             temperature=req.temperature,
         )
+        latency_ms = int((time.time() - start_time) * 1000)
+        asyncio.create_task(log_ai_activity(
+            user_id=current_user.id,
+            project_id=req.project_id,
+            document_id=None,
+            request_type="direct",
+            model=req.model,
+            provider=req.provider,
+            temperature=req.temperature,
+            request_messages=req.messages,
+            result_content=response,
+            latency_ms=latency_ms,
+        ))
         return {"content": response}
     except Exception as e:
+        latency_ms = int((time.time() - start_time) * 1000)
+        asyncio.create_task(log_ai_activity(
+            user_id=current_user.id,
+            project_id=req.project_id,
+            document_id=None,
+            request_type="direct",
+            model=req.model,
+            provider=req.provider,
+            temperature=req.temperature,
+            request_messages=req.messages,
+            latency_ms=latency_ms,
+            error=str(e),
+        ))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -146,18 +176,39 @@ async def stream(
                     content="Follow this author's style guide when writing:\n\n" + sg_context
                 ))
     
+    start_time = time.time()
+    chunks: list[str] = []
+    stream_error: str | None = None
+
     async def generate() -> AsyncIterator[str]:
+        nonlocal stream_error
         try:
             async for chunk in ai_provider.stream(
                 messages=messages,
                 model=req.model or "",
                 temperature=req.temperature,
             ):
+                chunks.append(chunk)
                 yield f"data: {chunk}\n\n"
         except Exception as e:
+            stream_error = str(e)
             yield f"data: [ERROR] {str(e)}\n\n"
         yield "data: [DONE]\n\n"
-    
+        latency_ms = int((time.time() - start_time) * 1000)
+        asyncio.create_task(log_ai_activity(
+            user_id=current_user.id,
+            project_id=req.project_id,
+            document_id=None,
+            request_type="stream",
+            model=req.model,
+            provider=req.provider,
+            temperature=req.temperature,
+            request_messages=req.messages,
+            result_content="".join(chunks) if chunks else None,
+            latency_ms=latency_ms,
+            error=stream_error,
+        ))
+
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
@@ -202,6 +253,8 @@ async def agentic(
         reasoning_provider=reasoning_provider,
     )
 
+    import time
+    start_time = time.time()
     try:
         result = await orchestrator.run(
             messages=messages,
@@ -216,6 +269,39 @@ async def agentic(
             document_type=req.document_type,
             field_name=req.field_name,
         )
+        latency_ms = int((time.time() - start_time) * 1000)
+        asyncio.create_task(log_ai_activity(
+            user_id=current_user.id,
+            project_id=req.project_id,
+            document_id=None,
+            request_type="agentic",
+            action=req.action,
+            prompt_text=req.prompt,
+            model=req.model,
+            provider=req.provider,
+            temperature=req.temperature,
+            tier=result.get("tier"),
+            reasoning_log=result.get("reasoning_log"),
+            consulted_docs=result.get("consulted_docs"),
+            request_messages=req.messages,
+            result_content=result.get("content"),
+            latency_ms=latency_ms,
+        ))
         return result
     except Exception as e:
+        latency_ms = int((time.time() - start_time) * 1000)
+        asyncio.create_task(log_ai_activity(
+            user_id=current_user.id,
+            project_id=req.project_id,
+            document_id=None,
+            request_type="agentic",
+            action=req.action,
+            prompt_text=req.prompt,
+            model=req.model,
+            provider=req.provider,
+            temperature=req.temperature,
+            request_messages=req.messages,
+            latency_ms=latency_ms,
+            error=str(e),
+        ))
         raise HTTPException(status_code=500, detail=str(e))

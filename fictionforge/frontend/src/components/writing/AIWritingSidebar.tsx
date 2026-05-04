@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from 'react'
+import { useRef, useState, useEffect, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAIWriting } from '@/hooks/useAIWriting'
 import { useModelPreferences } from '@/hooks/useModelPreferences'
@@ -7,10 +7,14 @@ import AgenticStatus from './AgenticStatus'
 import SpeechMicButton from '@/components/SpeechMicButton'
 import {
   Wand2, Sparkles, RefreshCw, Type, ArrowRight,
-  ChevronLeft, Loader2, Check, Zap, BookOpen,
+  Loader2, Check, Zap, BookOpen,
   MessageSquare, Trash2,
   Brain, Feather, Globe, Eye, Code, ScrollText, ChevronDown,
-  Music, Image, Star, AlertTriangle
+  Music, Image, Star, AlertTriangle,
+  Pen, Pencil, Highlighter, Search, List, ListOrdered,
+  FileText, Heart, Flame, Moon, Sun, Cloud, TreePine,
+  Mountain, Anchor, Sword, Shield, Crown, Gem, Key,
+  Lock, Unlock, User
 } from 'lucide-react'
 
 interface AIWritingSidebarProps {
@@ -22,8 +26,9 @@ interface AIWritingSidebarProps {
   currentDocumentId?: string
   currentDocumentTitle?: string
   currentDocumentType?: string
+  currentDocumentCategory?: string
   currentFieldName?: string
-  onCollapseChange?: (collapsed: boolean) => void
+  moduleName?: string
 }
 
 const FALLBACK_ACTIONS = [
@@ -37,14 +42,13 @@ const FALLBACK_ACTIONS = [
 const ICON_MAP: Record<string, React.ElementType> = {
   ArrowRight, RefreshCw, Type, Zap, Sparkles, Feather, BookOpen, ScrollText,
   Wand2, Brain, Globe, Eye, Code, Music, Image, Star, MessageSquare,
+  Pen, Pencil, Highlighter, Search, List, ListOrdered,
+  FileText, Heart, Flame, Moon, Sun, Cloud, TreePine,
+  Mountain, Anchor, Sword, Shield, Crown, Gem, Key,
+  Lock, Unlock, User
 }
 
-export default function AIWritingSidebar({ getSelectedText, getFullContext, onInsert, onAppend, projectId, currentDocumentId, currentDocumentTitle, currentDocumentType, currentFieldName, onCollapseChange }: AIWritingSidebarProps) {
-  const [isCollapsed, setIsCollapsedInternal] = useState(false)
-  const setIsCollapsed = (v: boolean) => {
-    setIsCollapsedInternal(v)
-    onCollapseChange?.(v)
-  }
+export default function AIWritingSidebar({ getSelectedText, getFullContext, onInsert, onAppend, projectId, currentDocumentId, currentDocumentTitle, currentDocumentType, currentDocumentCategory, currentFieldName, moduleName }: AIWritingSidebarProps) {
   const [quickActionLoading, setQuickActionLoading] = useState<string | null>(null)
   const [quickActionError, setQuickActionError] = useState<string | null>(null)
   const [isCreating, setIsCreating] = useState(false)
@@ -57,7 +61,7 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
     provider, setProvider,
     loading, setLoading,
     showSkills, setShowSkills,
-    includeStyleGuide, setIncludeStyleGuide,
+
     chatMessages, clearChat, setChatMessages,
     pendingPlan, setPendingPlan,
     creatingIndex, setCreatingIndex,
@@ -80,6 +84,19 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
   const chatContainerRef = useRef<HTMLDivElement>(null)
   const modelDropdownRef = useRef<HTMLDivElement>(null)
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false)
+
+  // Textarea height resize state
+  const [textareaHeight, setTextareaHeight] = useState(() => {
+    try {
+      const saved = localStorage.getItem('ff_ai_textarea_height')
+      return saved ? Math.max(60, Math.min(400, parseInt(saved, 10))) : 80
+    } catch {
+      return 80
+    }
+  })
+  const [isResizingHeight, setIsResizingHeight] = useState(false)
+  const textareaResizeStartY = useRef(0)
+  const textareaResizeStartHeight = useRef(textareaHeight)
 
   useEffect(() => {
     if (chatEndRef.current) {
@@ -104,13 +121,32 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
   }
 
   const handleGenerate = async () => {
-    const result = await agenticGenerate(getSelectedText(), getFullContext(), projectId)
+    const result = await agenticGenerate(getSelectedText(), getFullContext(), projectId, currentDocumentType)
     if (typeof result === 'string' && result !== 'outline_to_text_confirmed') {
       // Outline content was generated — insert into current doc or create new
       if (currentDocumentId) {
         onInsert(result)
       } else if (projectId) {
-        // Create new document with the outline
+        // Story bible context: create a story bible entry
+        if (currentDocumentType === 'story_bible') {
+          try {
+            const title = currentDocumentTitle || result.split('\n')[0].slice(0, 60) || 'New Entry'
+            const res = await api.post(`/story-bible/project/${projectId}`, {
+              project_id: projectId,
+              category: currentDocumentCategory || 'world',
+              title,
+              content: result,
+              tags: '',
+            })
+            queryClient.invalidateQueries({ queryKey: ['world', projectId] })
+            setChatMessages((prev) => [...prev, { role: 'assistant', content: `✅ Created story bible entry: **${res.data.title}**` }])
+          } catch (err: any) {
+            const msg = err.response?.data?.detail || err.message || 'Unknown error'
+            setChatMessages((prev) => [...prev, { role: 'assistant', content: `❌ Failed to create story bible entry: ${msg}` }])
+          }
+          return
+        }
+        // Default: create a regular document
         try {
           const res = await api.post('/documents', {
             project_id: projectId,
@@ -130,7 +166,26 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
       await writeOutlineToText(getFullContext(), projectId, onAppend)
     }
   }
-  const handleApplySkill = (skillId: string) => applySkill(skillId, getSelectedText(), getFullContext(), projectId)
+  const handleApplySkill = (skillId: string) => applySkill(skillId, getSelectedText(), getFullContext(), projectId, currentDocumentTitle, moduleName)
+
+  const parseCharacterProfile = (text: string): Record<string, string> | null => {
+    const lines = text.split('\n')
+    const result: Record<string, string> = {}
+    let currentKey: string | null = null
+    const keyPattern = /^([A-Z][A-Z_]*):\s*(.*)$/
+
+    for (const line of lines) {
+      const match = line.match(keyPattern)
+      if (match) {
+        currentKey = match[1].toLowerCase()
+        result[currentKey] = match[2].trim()
+      } else if (currentKey && line.trim()) {
+        result[currentKey] += '\n' + line.trim()
+      }
+    }
+
+    return Object.keys(result).length >= 3 ? result : null
+  }
 
   const handleQuickAction = async (actionId: string) => {
     if (!model) return
@@ -145,10 +200,79 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
       const skill = (skills || []).find((s: any) => s.id === actionId)
       let text: string
       if (skill && skill.is_agentic) {
-        text = await executeSkill(actionId, selectedText, fullContext, projectId, currentDocumentType, currentFieldName)
+        text = await executeSkill(actionId, selectedText, fullContext, projectId, currentDocumentType, currentFieldName, currentDocumentTitle, moduleName)
       } else {
         text = await agenticExecute(actionId, selectedText, fullContext, projectId, currentDocumentType, currentFieldName)
       }
+
+      // Entity creation mode: create characters, story bible entries, or notes from selected text
+      if (projectId && skill?.action) {
+        // Create Character from any document type
+        if (skill.action === 'create_character') {
+          const profile = parseCharacterProfile(text)
+          const charName = (profile?.name || selectedText || 'New Character').trim()
+          const payload = {
+            name: charName,
+            role: ['protagonist', 'antagonist', 'supporting', 'minor'].includes(profile?.role || '')
+              ? profile!.role
+              : 'supporting',
+            archetype: profile?.archetype || '',
+            age: profile?.age || '',
+            aliases: profile?.aliases || '',
+            appearance: profile?.appearance || '',
+            personality: profile?.personality || '',
+            background: profile?.background || '',
+            goals: profile?.goals || '',
+            conflicts: profile?.conflicts || '',
+            voice_description: profile?.voice_description || '',
+            notes: profile?.notes || text,
+          }
+          const res = await api.post(`/characters/project/${projectId}`, payload)
+          queryClient.invalidateQueries({ queryKey: ['characters', projectId] })
+          setChatMessages((prev) => [
+            ...prev,
+            { role: 'assistant', content: `✅ Created character: **${res.data.name}**\n\n${payload.appearance ? '**Appearance:** ' + payload.appearance.slice(0, 120) + '...' : ''}` },
+          ])
+          return
+        }
+
+        // Create Story Bible Entry from any document type
+        if (skill.action === 'create_story_bible') {
+          const title = (selectedText || text.split('\n')[0].replace(/^#+\s*/, '').slice(0, 60) || 'New Entry').trim()
+          const res = await api.post(`/story-bible/project/${projectId}`, {
+            project_id: projectId,
+            category: currentDocumentCategory || 'world',
+            title,
+            content: text,
+            tags: '',
+          })
+          queryClient.invalidateQueries({ queryKey: ['world', projectId] })
+          setChatMessages((prev) => [
+            ...prev,
+            { role: 'assistant', content: `✅ Created story bible entry: **${res.data.title}**` },
+          ])
+          return
+        }
+
+        // Create Note from any document type
+        if (skill.action === 'create_note') {
+          const title = (selectedText || text.split('\n')[0].replace(/^#+\s*/, '').slice(0, 60) || 'New Note').trim()
+          const res = await api.post('/documents', {
+            project_id: projectId,
+            title,
+            content: text,
+            parent_id: null,
+            doc_type: 'note',
+          })
+          queryClient.invalidateQueries({ queryKey: ['documents', projectId] })
+          setChatMessages((prev) => [
+            ...prev,
+            { role: 'assistant', content: `✅ Created note: **${res.data.title || title}**` },
+          ])
+          return
+        }
+      }
+
       onInsert(text)
     } catch (err: any) {
       setQuickActionError(err.message || 'Failed to generate')
@@ -202,6 +326,22 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
         const preview = content.length > 300 ? content.slice(0, 300) + '...' : content
         setChatMessages(prev => [...prev, { role: 'assistant', content: `**${doc.title}** — Preview:\n\n${preview}\n\n---\n_Saving..._` }])
 
+        // Story bible context: create story bible entries
+        if (currentDocumentType === 'story_bible') {
+          const saveRes = await api.post(`/story-bible/project/${projectId}`, {
+            project_id: projectId,
+            category: currentDocumentCategory || doc.doc_type || 'world',
+            title: doc.title,
+            content: content,
+            tags: '',
+          })
+          console.log('[DocCreate] Story bible entry saved:', saveRes.data?.id)
+          queryClient.invalidateQueries({ queryKey: ['world', projectId] })
+          successCount++
+          setChatMessages(prev => [...prev, { role: 'assistant', content: `✅ Saved **${doc.title}**` }])
+          continue
+        }
+
         const saveRes = await api.post('/documents', {
           project_id: projectId,
           title: doc.title,
@@ -241,30 +381,37 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
     setChatMessages(prev => [...prev, { role: 'assistant', content: 'Document creation cancelled.' }])
   }
 
-  if (isCollapsed) {
-    return (
-      <div className="h-full w-10 flex flex-col items-center py-3 border-l bg-card shrink-0">
-        <button
-          onClick={() => setIsCollapsed(false)}
-          className="p-1.5 rounded-md hover:bg-accent text-muted-foreground"
-          title="Expand AI sidebar"
-        >
-          <Wand2 className="h-5 w-5" />
-        </button>
-        <div className="flex-1" />
-        <button
-          onClick={() => setIsCollapsed(false)}
-          className="p-1.5 rounded-md hover:bg-accent text-muted-foreground"
-          title="Expand AI sidebar"
-        >
-          <ChevronLeft className="h-4 w-4" />
-        </button>
-      </div>
-    )
-  }
+  const handleTextareaResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    setIsResizingHeight(true)
+    textareaResizeStartY.current = e.clientY
+    textareaResizeStartHeight.current = textareaHeight
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const delta = textareaResizeStartY.current - moveEvent.clientY
+      const newHeight = Math.max(60, Math.min(400, textareaResizeStartHeight.current + delta))
+      setTextareaHeight(newHeight)
+    }
+
+    const handleMouseUp = () => {
+      setIsResizingHeight(false)
+      try {
+        localStorage.setItem('ff_ai_textarea_height', String(textareaHeight))
+      } catch { /* ignore */ }
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+    document.body.style.cursor = 'ns-resize'
+    document.body.style.userSelect = 'none'
+  }, [textareaHeight])
 
   return (
-    <div className="w-80 bg-card border-l flex flex-col h-full">
+    <div className="flex flex-col h-full">
       {/* Header */}
       <div className="p-3 border-b flex items-center justify-between shrink-0">
         <h3 className="font-semibold flex items-center gap-2">
@@ -281,13 +428,6 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
               <Trash2 className="h-3.5 w-3.5" />
             </button>
           )}
-          <button
-            onClick={() => setIsCollapsed(true)}
-            className="p-1 rounded hover:bg-accent text-muted-foreground"
-            title="Collapse"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
         </div>
       </div>
 
@@ -333,7 +473,7 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
           {modelDropdownOpen && (
             <div className="border rounded-md bg-background shadow-lg max-h-60 overflow-y-auto">
               {availableModels.length === 0 && (
-                <div className="px-3 py-2 text-sm text-muted-foreground">No models — add API key in Settings</div>
+                <div className="px-3 py-2 text-sm text-muted-foreground">No models — add API key in Configuration</div>
               )}
               {(() => {
                 const visible = availableModels.filter(m => !isHidden(m.id))
@@ -397,23 +537,7 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
         </div>
 
         {/* Style Guide toggle */}
-        {projectId && (
-          <div className="flex items-center gap-2">
-            <input
-              id="use-style-guide"
-              type="checkbox"
-              checked={includeStyleGuide}
-              onChange={(e) => setIncludeStyleGuide(e.target.checked)}
-              className="h-4 w-4 rounded border-gray-300"
-            />
-            <label htmlFor="use-style-guide" className="text-sm flex items-center gap-1 cursor-pointer">
-              <BookOpen className="h-3.5 w-3.5 text-muted-foreground" />
-              Use Style Guide
-            </label>
-          </div>
-        )}
-
-        {/* Quick action icons — driven by agentic skills */}
+        {/* Quick action icons — driven by agentic agents */}
         <div className="space-y-1">
           <label className="text-xs font-medium text-muted-foreground">Quick Actions</label>
           <div className="flex items-center gap-1 flex-wrap">
@@ -652,12 +776,30 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
 
       {/* Input area */}
       <div className="p-3 space-y-2 shrink-0 border-t">
+        {/* Height resize handle */}
+        <div
+          onMouseDown={handleTextareaResizeStart}
+          className={`
+            h-1.5 cursor-ns-resize flex items-center justify-center
+            hover:bg-accent/60 rounded-t
+            ${isResizingHeight ? 'bg-accent/80' : ''}
+            group
+          `}
+          title="Drag to resize height"
+        >
+          <div className={`
+            w-4 h-px
+            ${isResizingHeight ? 'bg-primary' : 'bg-border group-hover:bg-primary/50'}
+            transition-colors
+          `} />
+        </div>
         <textarea
           value={customPrompt}
           onChange={(e) => setCustomPrompt(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="What would you like the AI to do? Type /clear to reset chat."
-          className="w-full px-3 py-2 border rounded-md bg-background text-sm min-h-[60px] max-h-[120px] resize-none focus:outline-none focus:ring-1 focus:ring-primary"
+          style={{ height: textareaHeight }}
+          className="w-full px-3 py-2 border rounded-md bg-background text-sm resize-none focus:outline-none focus:ring-1 focus:ring-primary"
         />
         <div className="flex gap-2">
           <button
@@ -678,7 +820,7 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => setShowSkills(!showSkills)}
             className="px-3 py-2 border rounded-md text-sm hover:bg-accent"
-            title="Skills"
+            title="Agents"
           >
             <Sparkles className="h-4 w-4" />
           </button>
@@ -697,7 +839,7 @@ export default function AIWritingSidebar({ getSelectedText, getFullContext, onIn
               </button>
             ))}
             {skills?.length === 0 && (
-              <p className="text-xs text-muted-foreground px-3 py-1">No skills yet</p>
+              <p className="text-xs text-muted-foreground px-3 py-1">No agents yet</p>
             )}
           </div>
         )}

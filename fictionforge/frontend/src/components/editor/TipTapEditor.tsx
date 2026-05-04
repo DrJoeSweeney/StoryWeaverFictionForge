@@ -17,12 +17,27 @@ import {
 /**
  * Post-process HTML produced by marked to convert wiki-link and tag syntax
  * into HTML that TipTap can parse via our custom extensions.
+ *
+ * Supports Obsidian-style links:
+ *   [[Document Name]]
+ *   [[Document Name|Display Text]]
+ *   [[Document Name#Heading]]
+ *   [[Document Name#Heading|Display Text]]
  */
 function postprocessWikiLinksAndTags(html: string): string {
-  // [[Document Name]] → <a class="internal-link">[[Document Name]]</a>
+  // [[Title#Heading|Display]] → <a class="internal-link" ...>Display</a>
   const result = html.replace(
-    /\[\[([^\]]+)\]\]/g,
-    '<a class="internal-link" data-title="$1">[[$1]]</a>'
+    /\[\[([^|\]#]+)(?:#([^|\]]+))?(?:\|([^\]]+))?\]\]/g,
+    (_match, title, heading, display) => {
+      const safeTitle = title.trim()
+      const safeHeading = heading ? heading.trim() : ''
+      const safeDisplay = display ? display.trim() : ''
+      const text = safeDisplay || (safeHeading ? `[[${safeTitle}#${safeHeading}]]` : `[[${safeTitle}]]`)
+      let attrs = `class="internal-link" data-title="${safeTitle}"`
+      if (safeHeading) attrs += ` data-heading="${safeHeading}"`
+      if (safeDisplay) attrs += ` data-display="${safeDisplay}"`
+      return `<a ${attrs}>${text}</a>`
+    }
   )
   // #tag → <span class="content-tag">#tag</span>
   // Matches # followed by word characters (alphanumeric + underscore).
@@ -38,11 +53,21 @@ const turndown = new TurndownService({
   codeBlockStyle: 'fenced',
 })
 
-// Preserve internal links as [[Title]] in markdown output
+// Preserve internal links as [[Title#Heading|Display]] in markdown output
 turndown.addRule('internalLink', {
   filter: (node) =>
     node.nodeName === 'A' && node.classList.contains('internal-link'),
-  replacement: (content) => content,
+  replacement: (_content, node) => {
+    const title = node.getAttribute('data-title') || ''
+    const heading = node.getAttribute('data-heading')
+    const display = node.getAttribute('data-display')
+    if (!title) return _content
+    let result = `[[${title}`
+    if (heading) result += `#${heading}`
+    if (display) result += `|${display}`
+    result += ']]'
+    return result
+  },
 })
 
 // Preserve content tags as #tag in markdown output
@@ -65,6 +90,7 @@ export interface TipTapEditorRef {
 interface DocumentRef {
   id: string
   title: string
+  content?: string
 }
 
 interface TipTapEditorProps {
@@ -72,7 +98,7 @@ interface TipTapEditorProps {
   onChange: (markdown: string) => void
   documents?: DocumentRef[]
   tags?: string[]
-  onNavigateToDocument?: (documentId: string) => void
+  onNavigateToDocument?: (documentId: string, heading?: string) => void
   onTagClick?: (tag: string) => void
 }
 
@@ -116,9 +142,10 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
           // Internal link click
           if (target.classList.contains('internal-link')) {
             const title = target.getAttribute('data-title') || target.textContent?.replace(/^\[\[/, '').replace(/\]\]$/, '') || ''
+            const heading = target.getAttribute('data-heading') || undefined
             const doc = documents.find((d) => d.title === title)
             if (doc && onNavigateToDocument) {
-              onNavigateToDocument(doc.id)
+              onNavigateToDocument(doc.id, heading)
               return true
             }
           }
