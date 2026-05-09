@@ -1,17 +1,26 @@
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
+import Image from '@tiptap/extension-image'
+import Table from '@tiptap/extension-table'
+import TableRow from '@tiptap/extension-table-row'
+import TableCell from '@tiptap/extension-table-cell'
+import TableHeader from '@tiptap/extension-table-header'
 import { useEffect, useState, useMemo, useRef, forwardRef, useImperativeHandle, useCallback } from 'react'
 import { marked } from 'marked'
 import TurndownService from 'turndown'
 import { persistentSelectionKey, PersistentSelection } from './PersistentSelection'
 import { InternalLink } from './extensions/InternalLink'
+import { ExternalLink } from './extensions/ExternalLink'
 import { ContentTag } from './extensions/Tag'
+import { FoldHeading } from './extensions/FoldHeading'
+import { FileEmbed } from './extensions/FileEmbed'
 import SpeechMicButton from '@/components/SpeechMicButton'
 import HoverPreviewPopover, { useHoverPreview } from './HoverPreview'
 import {
   Bold, Italic, Heading1, Heading2, List, ListOrdered,
-  Quote, Code, Undo, Redo, Eye, FileCode, Tag
+  Quote, Code, Undo, Redo, Eye, FileCode, Tag, BookOpen,
+  ImageIcon, TableIcon, Link, Minus, CornerDownLeft, FileText
 } from 'lucide-react'
 
 /**
@@ -25,25 +34,48 @@ import {
  *   [[Document Name#Heading|Display Text]]
  */
 function postprocessWikiLinksAndTags(html: string, validTitles?: Set<string>): string {
-  // [[Title#Heading|Display]] → <a class="internal-link" ...>Display</a>
-  const result = html.replace(
-    /\[\[([^|\]#]+)(?:#([^|\]]+))?(?:\|([^\]]+))?\]\]/g,
+  // [text](url) → <a href="url">text</a> (external links)
+  let result = html.replace(
+    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    (_match, text, url) => `<a href="${url}">${text}</a>`
+  )
+  // ![[Title#Heading|Display]] → <div data-type="file-embed" data-title="Title" ...></div>
+  result = result.replace(
+    /!\[\[([^|\]#]+)(?:#([^|\]]+))?(?:\|([^\]]+))?\]\]/g,
     (_match, title, heading, display) => {
       const safeTitle = title.trim()
       const safeHeading = heading ? heading.trim() : ''
+      const safeDisplay = display ? display.trim() : ''
+      let attrs = `data-type="file-embed" data-title="${safeTitle}"`
+      if (safeHeading) attrs += ` data-heading="${safeHeading}"`
+      if (safeDisplay) attrs += ` data-display="${safeDisplay}"`
+      return `<div ${attrs}></div>`
+    }
+  )
+  // [[Title#Heading^blockId|Display]] → <a class="internal-link" ...>Display</a>
+  result = result.replace(
+    /\[\[([^|\]#^]+)(?:#([^|\]^]+))?(?:\^([^|\]]+))?(?:\|([^\]]+))?\]\]/g,
+    (_match, title, heading, blockId, display) => {
+      const safeTitle = title.trim()
+      const safeHeading = heading ? heading.trim() : ''
+      const safeBlockId = blockId ? blockId.trim() : ''
       const safeDisplay = display ? display.trim() : ''
       const text = safeDisplay || (safeHeading ? `[[${safeTitle}#${safeHeading}]]` : `[[${safeTitle}]]`)
       const isBroken = validTitles && !validTitles.has(safeTitle)
       let attrs = `class="internal-link" data-title="${safeTitle}"`
       if (safeHeading) attrs += ` data-heading="${safeHeading}"`
+      if (safeBlockId) attrs += ` data-block-id="${safeBlockId}"`
       if (safeDisplay) attrs += ` data-display="${safeDisplay}"`
       if (isBroken) attrs += ' data-broken="true"'
       return `<a ${attrs}>${text}</a>`
     }
   )
+  // ![alt](url) → <img src="url" alt="alt" />
+  result = result.replace(
+    /!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g,
+    (_match, alt, url) => `<img src="${url}" alt="${alt}" />`
+  )
   // #tag → <span class="content-tag">#tag</span>
-  // Supports nested tags: #parent/child/grandchild
-  // Match after start of string, whitespace, or HTML tag close (e.g. <p>)
   return result.replace(
     /(^|\s|>)#([a-zA-Z0-9_/-]+)(?![a-zA-Z0-9_/-])/g,
     '$1<span class="content-tag" data-tag="$2">#$2</span>'
@@ -56,17 +88,36 @@ const turndown = new TurndownService({
   codeBlockStyle: 'fenced',
 })
 
-// Preserve internal links as [[Title#Heading|Display]] in markdown output
+// Preserve external links as [text](url) in markdown output
+turndown.addRule('externalLink', {
+  filter: (node) => {
+    const el = node as HTMLElement
+    return (
+      el.nodeName === 'A' &&
+      !el.classList.contains('internal-link') &&
+      !el.classList.contains('content-tag') &&
+      !!el.getAttribute('href')
+    )
+  },
+  replacement: (content, node) => {
+    const url = node.getAttribute('href') || ''
+    return `[${content}](${url})`
+  },
+})
+
+// Preserve internal links as [[Title#Heading^blockId|Display]] in markdown output
 turndown.addRule('internalLink', {
   filter: (node) =>
     node.nodeName === 'A' && node.classList.contains('internal-link'),
   replacement: (_content, node) => {
     const title = node.getAttribute('data-title') || ''
     const heading = node.getAttribute('data-heading')
+    const blockId = node.getAttribute('data-block-id')
     const display = node.getAttribute('data-display')
     if (!title) return _content
     let result = `[[${title}`
     if (heading) result += `#${heading}`
+    if (blockId) result += `^${blockId}`
     // If user edited the link text, preserve it as display text
     const expected = display || (heading ? `[[${title}#${heading}]]` : `[[${title}]]`)
     if (_content && _content !== expected) {
@@ -76,6 +127,32 @@ turndown.addRule('internalLink', {
     }
     result += ']]'
     return result
+  },
+})
+
+// Preserve file embeds as ![[Title#Heading|Display]] in markdown output
+turndown.addRule('fileEmbed', {
+  filter: (node) => node.getAttribute('data-type') === 'file-embed',
+  replacement: (_content, node) => {
+    const title = node.getAttribute('data-title') || ''
+    const heading = node.getAttribute('data-heading')
+    const display = node.getAttribute('data-display')
+    let result = `![[${title}`
+    if (heading) result += `#${heading}`
+    if (display) result += `|${display}`
+    result += ']]'
+    return result
+  },
+})
+
+// Preserve images as ![alt](url) in markdown output
+turndown.addRule('image', {
+  filter: 'img',
+  replacement: (_content, node) => {
+    const el = node as HTMLElement
+    const src = el.getAttribute('src') || ''
+    const alt = el.getAttribute('alt') || ''
+    return `![${alt}](${src})`
   },
 })
 
@@ -115,7 +192,7 @@ interface TipTapEditorProps {
 
 const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
   function TipTapEditor({ content, onChange, documents = [], tags = [], onNavigateToDocument, onTagClick }, ref) {
-    const [viewMode, setViewMode] = useState<'paper' | 'markdown'>('paper')
+    const [viewMode, setViewMode] = useState<'paper' | 'markdown' | 'reading'>('paper')
     const [markdownValue, setMarkdownValue] = useState(content)
     const selectionRef = useRef<{ text: string; from: number; to: number; empty: boolean } | null>(null)
     const editorRef = useRef<ReturnType<typeof useEditor>>(null)
@@ -138,7 +215,15 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
         Placeholder.configure({ placeholder: 'Start writing...' }),
         PersistentSelection,
         InternalLink,
+        ExternalLink,
         ContentTag,
+        FoldHeading,
+        FileEmbed,
+        Image.configure({ inline: true }),
+        Table.configure({ resizable: false }),
+        TableRow,
+        TableCell,
+        TableHeader,
       ],
       []
     )
@@ -199,12 +284,19 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
 
     const editor = useEditor({
       extensions,
+      editable: viewMode !== 'reading',
       content: initialContent,
+      onCreate: ({ editor }) => {
+        editor.storage.documents = documents
+      },
       onUpdate: ({ editor }) => {
         const html = editor.getHTML()
         const md = turndown.turndown(html)
         setMarkdownValue(md)
         onChange(md)
+
+        // Keep documents in sync for file embeds
+        editor.storage.documents = documents
 
         // Check for /t slash command
         const { from, empty } = editor.state.selection
@@ -394,6 +486,18 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
       return () => window.removeEventListener('mousedown', handleClick)
     }, [tagPickerOpen, closeTagPicker])
 
+    // Listen for file-embed navigation events from node views
+    useEffect(() => {
+      const handler = (e: Event) => {
+        const detail = (e as CustomEvent).detail as { documentId: string; heading?: string }
+        if (detail?.documentId && onNavigateToDocument) {
+          onNavigateToDocument(detail.documentId, detail.heading)
+        }
+      }
+      window.addEventListener('file-embed-navigate', handler)
+      return () => window.removeEventListener('file-embed-navigate', handler)
+    }, [onNavigateToDocument])
+
     if (!editor) return null
 
     const FormatButton = ({
@@ -458,6 +562,16 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
               <FileCode className="h-3.5 w-3.5" />
               Markdown
             </button>
+            <button
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => setViewMode('reading')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                viewMode === 'reading' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <BookOpen className="h-3.5 w-3.5" />
+              Reading
+            </button>
           </div>
         </div>
 
@@ -490,9 +604,17 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
 
         {/* Editor */}
         <div className="flex-1 overflow-auto flex flex-col">
-          {viewMode === 'paper' ? (
+          {viewMode === 'markdown' ? (
+            <textarea
+              value={markdownValue}
+              onChange={(e) => handleMarkdownChange(e.target.value)}
+              className="w-full flex-1 p-4 bg-background font-mono text-sm leading-relaxed resize-none border-0 focus:outline-none"
+              spellCheck={false}
+            />
+          ) : (
             <div
               onClick={(e) => {
+                if (viewMode === 'reading') return
                 const target = e.target as HTMLElement
                 const pm = target.closest('.ProseMirror')
                 if (!pm && editor && !editor.isDestroyed) {
@@ -502,16 +624,11 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
             >
               <EditorContent
                 editor={editor}
-                className="prose prose-sm dark:prose-invert max-w-none focus:outline-none"
+                className={`prose dark:prose-invert max-w-none focus:outline-none ${
+                  viewMode === 'reading' ? 'prose-lg px-8 py-6' : 'prose-sm'
+                }`}
               />
             </div>
-          ) : (
-            <textarea
-              value={markdownValue}
-              onChange={(e) => handleMarkdownChange(e.target.value)}
-              className="w-full flex-1 p-4 bg-background font-mono text-sm leading-relaxed resize-none border-0 focus:outline-none"
-              spellCheck={false}
-            />
           )}
         </div>
 
@@ -526,67 +643,128 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
         />
 
         {/* Bottom formatting toolbar */}
-        <div className="flex items-center justify-center gap-1 p-2 border-t bg-card">
-          <FormatButton
-            onClick={() => editor.chain().focus().toggleBold().run()}
-            active={editor.isActive('bold')}
-            title="Bold"
-          >
-            <Bold className="h-4 w-4" />
-          </FormatButton>
-          <FormatButton
-            onClick={() => editor.chain().focus().toggleItalic().run()}
-            active={editor.isActive('italic')}
-            title="Italic"
-          >
-            <Italic className="h-4 w-4" />
-          </FormatButton>
-          <div className="w-px h-4 bg-border mx-1" />
-          <FormatButton
-            onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
-            active={editor.isActive('heading', { level: 1 })}
-            title="Heading 1"
-          >
-            <Heading1 className="h-4 w-4" />
-          </FormatButton>
-          <FormatButton
-            onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
-            active={editor.isActive('heading', { level: 2 })}
-            title="Heading 2"
-          >
-            <Heading2 className="h-4 w-4" />
-          </FormatButton>
-          <div className="w-px h-4 bg-border mx-1" />
-          <FormatButton
-            onClick={() => editor.chain().focus().toggleBulletList().run()}
-            active={editor.isActive('bulletList')}
-            title="Bullet List"
-          >
-            <List className="h-4 w-4" />
-          </FormatButton>
-          <FormatButton
-            onClick={() => editor.chain().focus().toggleOrderedList().run()}
-            active={editor.isActive('orderedList')}
-            title="Ordered List"
-          >
-            <ListOrdered className="h-4 w-4" />
-          </FormatButton>
-          <div className="w-px h-4 bg-border mx-1" />
-          <FormatButton
-            onClick={() => editor.chain().focus().toggleBlockquote().run()}
-            active={editor.isActive('blockquote')}
-            title="Quote"
-          >
-            <Quote className="h-4 w-4" />
-          </FormatButton>
-          <FormatButton
-            onClick={() => editor.chain().focus().toggleCodeBlock().run()}
-            active={editor.isActive('codeBlock')}
-            title="Code Block"
-          >
-            <Code className="h-4 w-4" />
-          </FormatButton>
-        </div>
+        {viewMode !== 'reading' && (
+          <div className="flex items-center justify-center gap-1 p-2 border-t bg-card">
+            <FormatButton
+              onClick={() => editor.chain().focus().toggleBold().run()}
+              active={editor.isActive('bold')}
+              title="Bold"
+            >
+              <Bold className="h-4 w-4" />
+            </FormatButton>
+            <FormatButton
+              onClick={() => editor.chain().focus().toggleItalic().run()}
+              active={editor.isActive('italic')}
+              title="Italic"
+            >
+              <Italic className="h-4 w-4" />
+            </FormatButton>
+            <div className="w-px h-4 bg-border mx-1" />
+            <FormatButton
+              onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
+              active={editor.isActive('heading', { level: 1 })}
+              title="Heading 1"
+            >
+              <Heading1 className="h-4 w-4" />
+            </FormatButton>
+            <FormatButton
+              onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
+              active={editor.isActive('heading', { level: 2 })}
+              title="Heading 2"
+            >
+              <Heading2 className="h-4 w-4" />
+            </FormatButton>
+            <div className="w-px h-4 bg-border mx-1" />
+            <FormatButton
+              onClick={() => editor.chain().focus().toggleBulletList().run()}
+              active={editor.isActive('bulletList')}
+              title="Bullet List"
+            >
+              <List className="h-4 w-4" />
+            </FormatButton>
+            <FormatButton
+              onClick={() => editor.chain().focus().toggleOrderedList().run()}
+              active={editor.isActive('orderedList')}
+              title="Ordered List"
+            >
+              <ListOrdered className="h-4 w-4" />
+            </FormatButton>
+            <div className="w-px h-4 bg-border mx-1" />
+            <FormatButton
+              onClick={() => {
+                const url = window.prompt('Enter image URL:')
+                if (url) editor.chain().focus().setImage({ src: url }).run()
+              }}
+              title="Insert Image"
+            >
+              <ImageIcon className="h-4 w-4" />
+            </FormatButton>
+            <FormatButton
+              onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 2, withHeaderRow: true }).run()}
+              title="Insert Table"
+            >
+              <TableIcon className="h-4 w-4" />
+            </FormatButton>
+            <FormatButton
+              onClick={() => {
+                const title = window.prompt('Enter document title to embed:')
+                if (title) {
+                  editor.chain().focus().insertContent({
+                    type: 'fileEmbed',
+                    attrs: { title: title.trim() },
+                  }).run()
+                }
+              }}
+              title="Insert File Embed"
+            >
+              <FileText className="h-4 w-4" />
+            </FormatButton>
+            <FormatButton
+              onClick={() => {
+                const url = window.prompt('Enter link URL:')
+                if (url) {
+                  const text = window.prompt('Link text (optional):') || url
+                  editor.chain().focus().insertContent({
+                    type: 'text',
+                    text,
+                    marks: [{ type: 'externalLink', attrs: { href: url } }],
+                  }).run()
+                }
+              }}
+              title="Insert Link"
+            >
+              <Link className="h-4 w-4" />
+            </FormatButton>
+            <div className="w-px h-4 bg-border mx-1" />
+            <FormatButton
+              onClick={() => editor.chain().focus().setHorizontalRule().run()}
+              title="Horizontal Rule"
+            >
+              <Minus className="h-4 w-4" />
+            </FormatButton>
+            <FormatButton
+              onClick={() => editor.chain().focus().setHardBreak().run()}
+              title="Hard Break"
+            >
+              <CornerDownLeft className="h-4 w-4" />
+            </FormatButton>
+            <div className="w-px h-4 bg-border mx-1" />
+            <FormatButton
+              onClick={() => editor.chain().focus().toggleBlockquote().run()}
+              active={editor.isActive('blockquote')}
+              title="Quote"
+            >
+              <Quote className="h-4 w-4" />
+            </FormatButton>
+            <FormatButton
+              onClick={() => editor.chain().focus().toggleCodeBlock().run()}
+              active={editor.isActive('codeBlock')}
+              title="Code Block"
+            >
+              <Code className="h-4 w-4" />
+            </FormatButton>
+          </div>
+        )}
       </div>
     )
   }

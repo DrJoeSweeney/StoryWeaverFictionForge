@@ -134,3 +134,99 @@
 .dark .content-tag:hover {
   background-color: hsl(280 65% 20%);
 }
+
+/* Reading mode */
+.reading-mode .ProseMirror {
+  outline: none !important;
+  cursor: default;
+}
+
+/* Table styling */
+.ProseMirror table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1em 0;
+}
+.ProseMirror th,
+.ProseMirror td {
+  border: 1px solid hsl(var(--border));
+  padding: 0.5em 0.75em;
+  text-align: left;
+}
+.ProseMirror th {
+  background-color: hsl(var(--muted));
+  font-weight: 600;
+}
+.ProseMirror tr:nth-child(even) td {
+  background-color: hsl(var(--muted) / 0.3);
+}
+
+/* Fold heading toggles */
+.fold-toggle {
+  cursor: pointer;
+  user-select: none;
+  margin-right: 0.35rem;
+  font-size: 0.7rem;
+  color: hsl(var(--muted-foreground));
+  display: inline-block;
+  vertical-align: middle;
+  line-height: 1;
+}
+.fold-toggle:hover {
+  color: hsl(var(--foreground));
+}
+
+.folded-hidden {
+  display: none !important;
+}
+
+/* File embeds / transclusion */
+.file-embed {
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin: 0.75rem 0;
+  background-color: hsl(var(--muted) / 0.2);
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+.file-embed:hover {
+  background-color: hsl(var(--muted) / 0.35);
+}
+.file-embed-selected {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: 2px;
+}
+.file-embed-broken {
+  border-color: hsl(var(--destructive));
+  background-color: hsl(var(--destructive) / 0.05);
+}
+.file-embed-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+.file-embed-title {
+  color: hsl(var(--foreground));
+}
+.file-embed-heading {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8rem;
+}
+.file-embed-truncated {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+  font-style: italic;
+}
+.file-embed-body {
+  opacity: 0.85;
+}
+.file-embed-body *:first-child {
+  margin-top: 0 !important;
+}
+.file-embed-body *:last-child {
+  margin-bottom: 0 !important;
+}
