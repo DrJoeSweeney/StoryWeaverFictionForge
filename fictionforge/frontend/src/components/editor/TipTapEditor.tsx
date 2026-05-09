@@ -1,17 +1,17 @@
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
-import { useEffect, useState, useMemo, useRef, forwardRef, useImperativeHandle } from 'react'
+import { useEffect, useState, useMemo, useRef, forwardRef, useImperativeHandle, useCallback } from 'react'
 import { marked } from 'marked'
 import TurndownService from 'turndown'
 import { persistentSelectionKey, PersistentSelection } from './PersistentSelection'
 import { InternalLink } from './extensions/InternalLink'
 import { ContentTag } from './extensions/Tag'
-import EditorAutocomplete from './EditorAutocomplete'
 import SpeechMicButton from '@/components/SpeechMicButton'
+import HoverPreviewPopover, { useHoverPreview } from './HoverPreview'
 import {
-  Bold, Italic, Heading1, Heading2, Heading3, Heading4, List, ListOrdered,
-  Quote, Code, Undo, Redo, Eye, FileCode
+  Bold, Italic, Heading1, Heading2, List, ListOrdered,
+  Quote, Code, Undo, Redo, Eye, FileCode, Tag
 } from 'lucide-react'
 
 /**
@@ -24,7 +24,7 @@ import {
  *   [[Document Name#Heading]]
  *   [[Document Name#Heading|Display Text]]
  */
-function postprocessWikiLinksAndTags(html: string): string {
+function postprocessWikiLinksAndTags(html: string, validTitles?: Set<string>): string {
   // [[Title#Heading|Display]] → <a class="internal-link" ...>Display</a>
   const result = html.replace(
     /\[\[([^|\]#]+)(?:#([^|\]]+))?(?:\|([^\]]+))?\]\]/g,
@@ -33,16 +33,19 @@ function postprocessWikiLinksAndTags(html: string): string {
       const safeHeading = heading ? heading.trim() : ''
       const safeDisplay = display ? display.trim() : ''
       const text = safeDisplay || (safeHeading ? `[[${safeTitle}#${safeHeading}]]` : `[[${safeTitle}]]`)
+      const isBroken = validTitles && !validTitles.has(safeTitle)
       let attrs = `class="internal-link" data-title="${safeTitle}"`
       if (safeHeading) attrs += ` data-heading="${safeHeading}"`
       if (safeDisplay) attrs += ` data-display="${safeDisplay}"`
+      if (isBroken) attrs += ' data-broken="true"'
       return `<a ${attrs}>${text}</a>`
     }
   )
   // #tag → <span class="content-tag">#tag</span>
-  // Matches # followed by word characters (alphanumeric + underscore).
+  // Supports nested tags: #parent/child/grandchild
+  // Match after start of string, whitespace, or HTML tag close (e.g. <p>)
   return result.replace(
-    /(^|\s)#(\w+)\b/g,
+    /(^|\s|>)#([a-zA-Z0-9_/-]+)(?![a-zA-Z0-9_/-])/g,
     '$1<span class="content-tag" data-tag="$2">#$2</span>'
   )
 }
@@ -64,7 +67,13 @@ turndown.addRule('internalLink', {
     if (!title) return _content
     let result = `[[${title}`
     if (heading) result += `#${heading}`
-    if (display) result += `|${display}`
+    // If user edited the link text, preserve it as display text
+    const expected = display || (heading ? `[[${title}#${heading}]]` : `[[${title}]]`)
+    if (_content && _content !== expected) {
+      result += `|${_content}`
+    } else if (display) {
+      result += `|${display}`
+    }
     result += ']]'
     return result
   },
@@ -91,6 +100,8 @@ interface DocumentRef {
   id: string
   title: string
   content?: string
+  aliases?: string[]
+  summary?: string
 }
 
 interface TipTapEditorProps {
@@ -106,8 +117,20 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
   function TipTapEditor({ content, onChange, documents = [], tags = [], onNavigateToDocument, onTagClick }, ref) {
     const [viewMode, setViewMode] = useState<'paper' | 'markdown'>('paper')
     const [markdownValue, setMarkdownValue] = useState(content)
-    const isUpdatingRef = useRef(false)
     const selectionRef = useRef<{ text: string; from: number; to: number; empty: boolean } | null>(null)
+    const editorRef = useRef<ReturnType<typeof useEditor>>(null)
+    const { preview, showPreview, hidePreview } = useHoverPreview(documents)
+
+    // /t slash command popup state
+    const [tagPickerOpen, setTagPickerOpen] = useState(false)
+    const tagPickerOpenRef = useRef(false)
+    const [tagPickerPos, setTagPickerPos] = useState({ top: 0, left: 0 })
+    const tagPickerSlashPos = useRef<number | null>(null)
+
+    // Keep ref in sync with state so keydown handler always sees current value
+    useEffect(() => {
+      tagPickerOpenRef.current = tagPickerOpen
+    }, [tagPickerOpen])
 
     const extensions = useMemo(
       () => [
@@ -120,21 +143,86 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
       []
     )
 
+    // Build set of valid document titles (including aliases) and resolution map
+    const { validTitles, titleToDoc } = useMemo(() => {
+      const titles = new Set<string>()
+      const map = new Map<string, DocumentRef>()
+      for (const doc of documents) {
+        titles.add(doc.title)
+        map.set(doc.title, doc)
+        for (const alias of doc.aliases || []) {
+          if (alias) {
+            titles.add(alias)
+            map.set(alias, doc)
+          }
+        }
+      }
+      return { validTitles: titles, titleToDoc: map }
+    }, [documents])
+
     // Convert markdown to HTML, then post-process [[...]] and #tag syntax
     const initialContent = useMemo(() => {
       const rawHtml = marked.parse(content || '', { async: false }) as string
-      return postprocessWikiLinksAndTags(rawHtml)
+      return postprocessWikiLinksAndTags(rawHtml, validTitles)
+    }, [content, validTitles])
+
+    const closeTagPicker = useCallback(() => {
+      setTagPickerOpen(false)
+      tagPickerSlashPos.current = null
     }, [])
+
+    const insertTagFromPicker = useCallback((tag: string) => {
+      const ed = editorRef.current
+      if (!ed || ed.isDestroyed) return
+      const slashPos = tagPickerSlashPos.current
+      if (slashPos == null) {
+        ed.chain().insertContentAt(ed.state.selection.from, {
+          type: 'text',
+          text: `#${tag}`,
+          marks: [{ type: 'contentTag', attrs: { tag } }],
+        }).focus().run()
+      } else {
+        const { from } = ed.state.selection
+        ed
+          .chain()
+          .deleteRange({ from: slashPos, to: from })
+          .insertContentAt(slashPos, {
+            type: 'text',
+            text: `#${tag}`,
+            marks: [{ type: 'contentTag', attrs: { tag } }],
+          })
+          .focus()
+          .run()
+      }
+      closeTagPicker()
+    }, [closeTagPicker])
 
     const editor = useEditor({
       extensions,
       content: initialContent,
       onUpdate: ({ editor }) => {
-        if (isUpdatingRef.current) return
         const html = editor.getHTML()
         const md = turndown.turndown(html)
         setMarkdownValue(md)
         onChange(md)
+
+        // Check for /t slash command
+        const { from, empty } = editor.state.selection
+        if (empty) {
+          const $from = editor.state.selection.$from
+          const blockStart = $from.start()
+          const textBefore = editor.state.doc.textBetween(blockStart, from)
+          const slashMatch = textBefore.match(/(?:^|\s)\/t$/)
+          if (slashMatch) {
+            const slashStart = from - 2 // '/t' is 2 chars
+            tagPickerSlashPos.current = slashStart
+            const coords = editor.view.coordsAtPos(from)
+            setTagPickerPos({ top: coords.bottom + 4, left: coords.left })
+            setTagPickerOpen(true)
+          } else if (tagPickerOpenRef.current) {
+            closeTagPicker()
+          }
+        }
       },
       editorProps: {
         handleClickOn: (_view, _pos, _node, _nodePos, event) => {
@@ -143,7 +231,7 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
           if (target.classList.contains('internal-link')) {
             const title = target.getAttribute('data-title') || target.textContent?.replace(/^\[\[/, '').replace(/\]\]$/, '') || ''
             const heading = target.getAttribute('data-heading') || undefined
-            const doc = documents.find((d) => d.title === title)
+            const doc = titleToDoc.get(title)
             if (doc && onNavigateToDocument) {
               onNavigateToDocument(doc.id, heading)
               return true
@@ -159,6 +247,39 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
           }
           return false
         },
+        handleDOMEvents: {
+          mouseover: (_view, event) => {
+            const target = (event.target as HTMLElement).closest('.internal-link') as HTMLElement | null
+            if (target && !target.hasAttribute('data-broken')) {
+              const title = target.getAttribute('data-title') || ''
+              const doc = titleToDoc.get(title)
+              if (doc) {
+                showPreview(doc.title, target.getBoundingClientRect())
+              }
+            }
+            return false
+          },
+          mouseout: (_view, event) => {
+            const target = (event.target as HTMLElement).closest('.internal-link') as HTMLElement | null
+            const related = (event as MouseEvent).relatedTarget as HTMLElement | null
+            if (target) {
+              // Don't hide if we're moving to another element inside the same link
+              if (related && target.contains(related)) {
+                return false
+              }
+              hidePreview()
+            }
+            return false
+          },
+          keydown: (_view, event) => {
+            if (event.key === 'Escape' && tagPickerOpenRef.current) {
+              event.preventDefault()
+              closeTagPicker()
+              return true
+            }
+            return false
+          },
+        },
       },
       onSelectionUpdate: ({ editor }) => {
         const { from, to, empty } = editor.state.selection
@@ -166,6 +287,8 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
         selectionRef.current = { text, from, to, empty }
       },
     })
+
+    editorRef.current = editor
 
     useImperativeHandle(ref, () => ({
       getSelectionInfo: () => {
@@ -189,7 +312,7 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
       replaceSelection: (text: string) => {
         if (!editor || editor.isDestroyed) return
         // Convert markdown to HTML so AI output renders properly in the editor
-        const html = postprocessWikiLinksAndTags(marked.parse(text, { async: false }) as string)
+        const html = postprocessWikiLinksAndTags(marked.parse(text, { async: false }) as string, validTitles)
         editor.chain().focus().insertContent(html).run()
         // Clear the persistent highlight after replacement
         const tr = editor.state.tr.setMeta(persistentSelectionKey, { action: 'clear' })
@@ -198,7 +321,7 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
       insertAtCursor: (text: string) => {
         if (!editor || editor.isDestroyed) return
         // Convert markdown to HTML so AI output renders properly in the editor
-        const html = postprocessWikiLinksAndTags(marked.parse(text, { async: false }) as string)
+        const html = postprocessWikiLinksAndTags(marked.parse(text, { async: false }) as string, validTitles)
         editor.chain().focus().insertContent(html).run()
       },
       appendToEnd: (text: string) => {
@@ -221,25 +344,6 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
         return turndown.turndown(html)
       },
     }), [editor])
-
-    // Sync external content changes (e.g., AI insert, initial load)
-    // Never reset while the editor is focused (user is typing)
-    useEffect(() => {
-      if (!editor || editor.isDestroyed || editor.isFocused) return
-
-      const currentMd = turndown.turndown(editor.getHTML())
-      if (currentMd !== content) {
-        isUpdatingRef.current = true
-        editor.commands.setContent(
-          postprocessWikiLinksAndTags(marked.parse(content || '', { async: false }) as string),
-          false
-        )
-        setMarkdownValue(content)
-        requestAnimationFrame(() => {
-          isUpdatingRef.current = false
-        })
-      }
-    }, [content, editor])
 
     // Dynamically size .ProseMirror to fill the scroll container so empty docs
     // still show a full-height typing area, while letting it grow with content.
@@ -276,6 +380,19 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
         )
       }
     }
+
+    // Close tag picker on click outside
+    const tagPickerRef = useRef<HTMLDivElement>(null)
+    useEffect(() => {
+      if (!tagPickerOpen) return
+      const handleClick = (e: MouseEvent) => {
+        if (tagPickerRef.current && !tagPickerRef.current.contains(e.target as Node)) {
+          closeTagPicker()
+        }
+      }
+      window.addEventListener('mousedown', handleClick)
+      return () => window.removeEventListener('mousedown', handleClick)
+    }, [tagPickerOpen, closeTagPicker])
 
     if (!editor) return null
 
@@ -344,8 +461,32 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
           </div>
         </div>
 
-        {/* Autocomplete floating popover */}
-        <EditorAutocomplete editor={editor} documents={documents} tags={tags} />
+        {/* /t Tag picker popup */}
+        {tagPickerOpen && (
+          <div
+            ref={tagPickerRef}
+            className="fixed z-50 bg-popover border rounded-md shadow-lg py-1 min-w-[180px] max-h-[240px] overflow-auto"
+            style={{ top: tagPickerPos.top, left: tagPickerPos.left }}
+          >
+            <div className="px-2 py-1 text-xs text-muted-foreground border-b mb-1">
+              Insert tag
+            </div>
+            {tags.length === 0 && (
+              <div className="px-3 py-2 text-sm text-muted-foreground">No tags yet</div>
+            )}
+            {tags.map((tag) => (
+              <button
+                key={tag}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => insertTagFromPicker(tag)}
+                className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent transition-colors flex items-center gap-2"
+              >
+                <Tag className="h-3 w-3 text-muted-foreground" />
+                {tag}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Editor */}
         <div className="flex-1 overflow-auto flex flex-col">
@@ -373,6 +514,16 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
             />
           )}
         </div>
+
+        {/* Hover preview popover */}
+        <HoverPreviewPopover
+          x={preview.x}
+          y={preview.y}
+          title={preview.title}
+          text={preview.text}
+          summary={preview.summary}
+          visible={preview.visible}
+        />
 
         {/* Bottom formatting toolbar */}
         <div className="flex items-center justify-center gap-1 p-2 border-t bg-card">
@@ -404,20 +555,6 @@ const TipTapEditor = forwardRef<TipTapEditorRef, TipTapEditorProps>(
             title="Heading 2"
           >
             <Heading2 className="h-4 w-4" />
-          </FormatButton>
-          <FormatButton
-            onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
-            active={editor.isActive('heading', { level: 3 })}
-            title="Heading 3"
-          >
-            <Heading3 className="h-4 w-4" />
-          </FormatButton>
-          <FormatButton
-            onClick={() => editor.chain().focus().toggleHeading({ level: 4 }).run()}
-            active={editor.isActive('heading', { level: 4 })}
-            title="Heading 4"
-          >
-            <Heading4 className="h-4 w-4" />
           </FormatButton>
           <div className="w-px h-4 bg-border mx-1" />
           <FormatButton

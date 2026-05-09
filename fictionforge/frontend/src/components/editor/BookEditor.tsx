@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo } from 'react'
+import { useState, useRef, useMemo, useCallback } from 'react'
 import type { TipTapEditorRef } from './TipTapEditor'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
@@ -12,8 +12,13 @@ import ResizablePanel from '@/components/shared/ResizablePanel'
 import TipTapEditor from './TipTapEditor'
 import AIWritingSidebar from '../writing/AIWritingSidebar'
 import FrontmatterEditor from './FrontmatterEditor'
+import BacklinksPanel from './BacklinksPanel'
+import OutgoingLinksPanel from './OutgoingLinksPanel'
+import TagPageModal from '@/components/tags/TagPageModal'
+
 import { useDebounce } from '@/hooks/useDebounce'
 import { useProjectTags } from '@/hooks/useProjectTags'
+import { usePersistedSelectionId } from '@/hooks/usePersistedSelection'
 
 interface Document {
   id: string
@@ -48,13 +53,15 @@ function getSectionInfo(docType: string) {
 }
 
 export default function BookEditor({ projectId }: { projectId: string }) {
-  const [selectedDoc, setSelectedDoc] = useState<Document | null>(null)
+  const [persistedId, setPersistedId] = usePersistedSelectionId(`ff-project-${projectId}-writing-selection`)
   const [showNewForm, setShowNewForm] = useState(false)
   const [newTitle, setNewTitle] = useState('')
   const [newDocType, setNewDocType] = useState('chapter')
   const [newParentId, setNewParentId] = useState<string | null>(null)
+  const [activeTag, setActiveTag] = useState<string | null>(null)
   const editorRef = useRef<TipTapEditorRef>(null)
   const queryClient = useQueryClient()
+  const persistedTitleRef = useRef<string>('')
 
   const { data: documents, isLoading } = useQuery({
     queryKey: ['documents', projectId],
@@ -70,6 +77,9 @@ export default function BookEditor({ projectId }: { projectId: string }) {
   const sections = (documents || [])
     .filter((d) => BOOK_SECTION_TYPES.includes(d.doc_type) || !d.doc_type)
     .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
+
+  const selectedDoc = useMemo(() => sections.find((d) => d.id === persistedId) || null, [sections, persistedId])
+  const setSelectedDoc = useCallback((doc: Document | null) => setPersistedId(doc?.id || null), [setPersistedId])
 
   const createDocMutation = useMutation({
     mutationFn: (data: { project_id: string; title: string; parent_id: string | null; doc_type: string }) =>
@@ -101,6 +111,15 @@ export default function BookEditor({ projectId }: { projectId: string }) {
       }
     },
     onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['documents', projectId] })
+      queryClient.invalidateQueries({ queryKey: ['project-tags', projectId] })
+    },
+  })
+
+  const renameDocMutation = useMutation({
+    mutationFn: ({ id, new_title }: { id: string; new_title: string }) =>
+      api.post(`/documents/${id}/rename`, { new_title }),
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['documents', projectId] })
     },
   })
@@ -166,9 +185,11 @@ export default function BookEditor({ projectId }: { projectId: string }) {
   const parentOptions = buildParentOptions(documents || [])
 
   const handleDocContentChange = (content: string) => {
-    if (selectedDoc) {
-      setSelectedDoc({ ...selectedDoc, content })
-    }
+    if (!selectedDoc) return
+    queryClient.setQueryData(['documents', projectId], (old: Document[] | undefined) => {
+      if (!old) return old
+      return old.map((doc) => (doc.id === selectedDoc.id ? { ...doc, content } : doc))
+    })
   }
 
   const getDocFrontmatter = (doc: Document): Record<string, any> => {
@@ -293,7 +314,11 @@ export default function BookEditor({ projectId }: { projectId: string }) {
             <DraggableTreePanel
               items={sections.map((d) => ({ ...d, title: d.title, parent_id: d.parent_id || null, sort_order: d.sort_order || 0 }))}
               selectedId={selectedDoc?.id}
-              onSelect={(item) => setSelectedDoc(item as Document)}
+              onSelect={(item) => {
+                const doc = item as Document
+                setSelectedDoc(doc)
+                persistedTitleRef.current = doc.title
+              }}
               onReorder={(ids) => reorderMutation.mutate(ids)}
               onNest={(id, parentId) => nestMutation.mutate({ id, parent_id: parentId })}
               renderIcon={(item) => {
@@ -320,9 +345,14 @@ export default function BookEditor({ projectId }: { projectId: string }) {
                   <input
                     value={selectedDoc.title}
                     onChange={(e) => {
-                      const updated = { ...selectedDoc, title: e.target.value }
-                      setSelectedDoc(updated)
-                      updateDocMutation.mutate({ id: selectedDoc.id, data: { title: e.target.value } })
+                      setSelectedDoc({ ...selectedDoc, title: e.target.value })
+                    }}
+                    onBlur={(e) => {
+                      const newTitle = e.target.value
+                      if (newTitle !== persistedTitleRef.current) {
+                        renameDocMutation.mutate({ id: selectedDoc.id, new_title: newTitle })
+                        persistedTitleRef.current = newTitle
+                      }
                     }}
                     className="text-lg font-semibold bg-transparent border-none focus:outline-none focus:ring-0 flex-1"
                   />
@@ -347,7 +377,7 @@ export default function BookEditor({ projectId }: { projectId: string }) {
                 frontmatter={getDocFrontmatter(selectedDoc)}
                 systemFields={DOC_SYSTEM_FIELDS}
                 existingKeys={existingFrontmatterKeys}
-                documents={(documents || []).map((d) => ({ id: d.id, title: d.title }))}
+                documents={(documents || []).map((d) => ({ id: d.id, title: d.title, aliases: d.aliases }))}
                 onChange={handleFrontmatterChange}
                 onNavigateToDocument={(docId, heading) => {
                   const doc = sections.find((d) => d.id === docId)
@@ -368,6 +398,7 @@ export default function BookEditor({ projectId }: { projectId: string }) {
                     }
                   }
                 }}
+                content={selectedDoc.content}
               />
               <div className="flex-1 overflow-hidden">
                 <TipTapEditor
@@ -375,7 +406,7 @@ export default function BookEditor({ projectId }: { projectId: string }) {
                   ref={editorRef}
                   content={selectedDoc.content}
                   onChange={handleDocContentChange}
-                  documents={(documents || []).map((d) => ({ id: d.id, title: d.title, content: d.content }))}
+                  documents={(documents || []).map((d) => ({ id: d.id, title: d.title, content: d.content, aliases: d.aliases, summary: d.summary }))}
                   tags={projectTags || []}
                   onNavigateToDocument={(docId, heading) => {
                     const doc = sections.find((d) => d.id === docId)
@@ -397,10 +428,41 @@ export default function BookEditor({ projectId }: { projectId: string }) {
                     }
                   }}
                   onTagClick={(tag) => {
-                    console.log('Tag clicked:', tag)
+                    setActiveTag(tag)
                   }}
                 />
               </div>
+              <BacklinksPanel
+                sources={(documents || []).map((d) => ({ id: d.id, title: d.title, content: d.content, aliases: d.aliases }))}
+                currentTitle={selectedDoc.title}
+                onNavigateToDocument={(docId) => {
+                  const doc = sections.find((d) => d.id === docId)
+                  if (doc) setSelectedDoc(doc)
+                }}
+              />
+              <OutgoingLinksPanel
+                documents={(documents || []).map((d) => ({ id: d.id, title: d.title }))}
+                content={selectedDoc.content}
+                onNavigateToDocument={(docId, heading) => {
+                  const doc = sections.find((d) => d.id === docId)
+                  if (doc) {
+                    setSelectedDoc(doc)
+                    if (heading) {
+                      requestAnimationFrame(() => {
+                        const pm = document.querySelector('.ProseMirror')
+                        if (!pm) return
+                        const headings = pm.querySelectorAll('h1, h2, h3, h4, h5, h6')
+                        for (const h of headings) {
+                          if (h.textContent?.trim().toLowerCase() === heading.trim().toLowerCase()) {
+                            h.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                            break
+                          }
+                        }
+                      })
+                    }
+                  }
+                }}
+              />
             </div>
           ) : (
             <div className="flex items-center justify-center h-full text-muted-foreground">
@@ -411,6 +473,14 @@ export default function BookEditor({ projectId }: { projectId: string }) {
             </div>
           )}
         </div>
+
+        {activeTag && (
+          <TagPageModal
+            projectId={projectId}
+            tag={activeTag}
+            onClose={() => setActiveTag(null)}
+          />
+        )}
 
         {/* AI Sidebar */}
         <ResizablePanel side="right" defaultWidth={320} storageKey="book_editor_right">
@@ -423,6 +493,7 @@ export default function BookEditor({ projectId }: { projectId: string }) {
             currentDocumentId={selectedDoc?.id}
             currentDocumentTitle={selectedDoc?.title}
             currentDocumentType={selectedDoc?.doc_type}
+            currentDocumentSummary={selectedDoc?.summary}
             currentFieldName="content"
             moduleName="Writing"
           />
