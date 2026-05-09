@@ -50,6 +50,12 @@ export const InternalLink = Mark.create({
         renderHTML: (attributes) =>
           attributes.displayText ? { 'data-display': attributes.displayText } : {},
       },
+      blockId: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('data-block-id'),
+        renderHTML: (attributes) =>
+          attributes.blockId ? { 'data-block-id': attributes.blockId } : {},
+      },
     }
   },
 })
